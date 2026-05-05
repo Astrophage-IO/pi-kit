@@ -1,16 +1,25 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import type { Readable } from "node:stream";
 import { PiBusServer } from "../src/server.ts";
 
 const cwd = new URL("..", import.meta.url).pathname;
 
-type RpcResponse = { success?: boolean; error?: string; data?: any; [key: string]: any };
+type JsonRecord = Record<string, unknown>;
+type RpcResponse = JsonRecord & { success?: boolean; error?: string; data?: unknown };
+type RpcMessage = JsonRecord;
 
-function attachJsonlReader(stream: any, onLine: (line: string) => void) {
+interface PendingRpc {
+	resolve(value: RpcResponse): void;
+	reject(error: Error): void;
+	timeout: ReturnType<typeof setTimeout>;
+}
+
+function attachJsonlReader(stream: Readable, onLine: (line: string) => void): void {
 	const decoder = new StringDecoder("utf8");
 	let buffer = "";
-	stream.on("data", (chunk) => {
+	stream.on("data", (chunk: Buffer | string) => {
 		buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
 		while (true) {
 			const newlineIndex = buffer.indexOf("\n");
@@ -24,14 +33,16 @@ function attachJsonlReader(stream: any, onLine: (line: string) => void) {
 }
 
 class PiRpcAgent {
-	[key: string]: any;
+	readonly id: string;
+	readonly name: string;
+	readonly proc: ReturnType<typeof spawn>;
+	readonly events: RpcMessage[] = [];
+	readonly pending = new Map<string, PendingRpc>();
+	stderr = "";
 
 	constructor({ id, name, port }: { id: string; name: string; port: number }) {
 		this.id = id;
 		this.name = name;
-		this.events = [];
-		this.pending = new Map();
-		this.stderr = "";
 		this.proc = spawn(
 			"pi",
 			["--mode", "rpc", "--no-session", "--no-builtin-tools", "-e", "./extensions/pi-bus.ts"],
@@ -50,74 +61,80 @@ class PiRpcAgent {
 				stdio: ["pipe", "pipe", "pipe"],
 			},
 		);
-		this.proc.stderr.on("data", (chunk) => {
+		if (!this.proc.stdout || !this.proc.stderr || !this.proc.stdin) throw new Error("pi RPC child did not expose stdio pipes");
+		this.proc.stderr.on("data", (chunk: Buffer | string) => {
 			this.stderr += chunk.toString();
 		});
 		attachJsonlReader(this.proc.stdout, (line) => {
-			let message;
+			let parsed: unknown;
 			try {
-				message = JSON.parse(line);
+				parsed = JSON.parse(line);
 			} catch {
 				return;
 			}
-			this.events.push(message);
-			if (message.type === "response" && message.id && this.pending.has(message.id)) {
-				const pending = this.pending.get(message.id);
-				this.pending.delete(message.id);
+			if (!isRecord(parsed)) return;
+			this.events.push(parsed);
+			if (parsed.type === "response" && typeof parsed.id === "string") {
+				const pending = this.pending.get(parsed.id);
+				if (!pending) return;
+				this.pending.delete(parsed.id);
 				clearTimeout(pending.timeout);
-				pending.resolve(message);
+				pending.resolve(parsed as RpcResponse);
 			}
 		});
 	}
 
-	send(command: Record<string, any>, timeoutMs = 15_000): Promise<RpcResponse> {
-		const id = command.id ?? `${this.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+	send(command: Record<string, unknown>, timeoutMs = 15_000): Promise<RpcResponse> {
+		const id = typeof command.id === "string" ? command.id : `${this.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 		return new Promise((resolve, reject) => {
 			const timeout = setTimeout(() => {
 				this.pending.delete(id);
-				reject(new Error(`${this.id} RPC timeout for ${command.type}\n${this.stderr}`));
+				reject(new Error(`${this.id} RPC timeout for ${String(command.type)}\n${this.stderr}`));
 			}, timeoutMs);
 			this.pending.set(id, { resolve, reject, timeout });
-			this.proc.stdin.write(`${JSON.stringify({ ...command, id })}\n`);
+			this.proc.stdin?.write(`${JSON.stringify({ ...command, id })}\n`);
 		});
 	}
 
-	async getMessages() {
+	async getMessages(): Promise<RpcMessage[]> {
 		const response = await this.send({ type: "get_messages" });
 		if (!response.success) throw new Error(`${this.id} get_messages failed: ${response.error}`);
-		return response.data.messages;
+		const data = isRecord(response.data) ? response.data : {};
+		return Array.isArray(data.messages) ? data.messages.filter(isRecord) : [];
 	}
 
-	async hasMessageText(text: string) {
+	async hasMessageText(text: string): Promise<boolean> {
 		const messages = await this.getMessages();
-		return messages.some((message: any) => JSON.stringify(message).includes(text));
+		return messages.some((message) => JSON.stringify(message).includes(text));
 	}
 
-	async waitForMessageText(text: string, timeoutMs = 5_000) {
+	async waitForMessageText(text: string, timeoutMs = 5_000): Promise<RpcMessage> {
 		const start = Date.now();
 		while (Date.now() - start < timeoutMs) {
 			const messages = await this.getMessages();
-			const found = messages.find((message: any) => JSON.stringify(message).includes(text));
+			const found = messages.find((message) => JSON.stringify(message).includes(text));
 			if (found) return found;
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
 		throw new Error(`${this.id} did not receive message containing ${text}`);
 	}
 
-	close() {
+	close(): void {
 		for (const pending of this.pending.values()) {
 			clearTimeout(pending.timeout);
 			pending.reject(new Error(`${this.id} closed`));
 		}
 		this.pending.clear();
-		this.proc.stdin.end();
+		this.proc.stdin?.end();
 		this.proc.kill("SIGTERM");
 	}
 }
 
 const server = new PiBusServer({ host: "127.0.0.1", port: 0, heartbeatMs: 60_000 });
 await server.listen();
-const port = server.address().port;
+const address = server.address();
+if (!address || typeof address === "string") throw new Error("PiBus smoke server did not bind a TCP address");
+const port = address.port;
 console.log(`[pi-bus-smoke] broker listening on ${port}`);
 
 const planner = new PiRpcAgent({ id: "planner-smoke", name: "Planner Smoke", port });
@@ -134,7 +151,7 @@ try {
 	const plannerSend = await planner.send({ type: "prompt", message: "/bus-send agent.message hello-from-planner" });
 	if (!plannerSend.success) throw new Error(`planner /bus-send failed: ${plannerSend.error}`);
 	const workerMessage = await worker.waitForMessageText("hello-from-planner");
-	console.log(`[pi-bus-smoke] worker received planner message (${workerMessage.role}/${workerMessage.customType ?? ""})`);
+	console.log(`[pi-bus-smoke] worker received planner message (${String(workerMessage.role)}/${String(workerMessage.customType ?? "")})`);
 	const plannerSecondSend = await planner.send({ type: "prompt", message: "/bus-send agent.message hello-again-from-planner" });
 	if (!plannerSecondSend.success) throw new Error(`planner second /bus-send failed: ${plannerSecondSend.error}`);
 	await worker.waitForMessageText("hello-again-from-planner");
@@ -143,7 +160,7 @@ try {
 	const workerSend = await worker.send({ type: "prompt", message: "/bus-send agent.reply ack-from-worker" });
 	if (!workerSend.success) throw new Error(`worker /bus-send failed: ${workerSend.error}`);
 	const plannerMessage = await planner.waitForMessageText("ack-from-worker");
-	console.log(`[pi-bus-smoke] planner received worker message (${plannerMessage.role}/${plannerMessage.customType ?? ""})`);
+	console.log(`[pi-bus-smoke] planner received worker message (${String(plannerMessage.role)}/${String(plannerMessage.customType ?? "")})`);
 
 	const workerDisconnect = await worker.send({ type: "prompt", message: "/bus-disconnect" });
 	if (!workerDisconnect.success) throw new Error(`worker /bus-disconnect failed: ${workerDisconnect.error}`);
@@ -166,4 +183,8 @@ try {
 	planner.close();
 	worker.close();
 	await server.close();
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

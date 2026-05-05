@@ -1,6 +1,20 @@
+import { Buffer } from "node:buffer";
 import { EventEmitter } from "node:events";
 import net from "node:net";
 import os from "node:os";
+import { create } from "@bufbuild/protobuf";
+import {
+	PeerRefSchema,
+	PresenceSchema,
+	type BusEvent,
+	type Frame,
+	type Hello,
+	type HistoryRequest,
+	type Peer,
+	type Presence,
+	type Publish,
+	type Subscribe,
+} from "./gen/pi_bus/v1/pi_bus_pb.ts";
 import {
 	DEFAULT_HOST,
 	DEFAULT_PORT,
@@ -8,202 +22,347 @@ import {
 	DEFAULT_TOPIC,
 	PROTOCOL_VERSION,
 	compactPeer,
-	frame,
-	isPlainObject,
 	makeId,
 	matchTopic,
-	messageTextFromEvent,
+	normalizeBusEvent,
 	normalizeRooms,
 	normalizeTarget,
 	normalizeTopics,
 	nowIso,
-	parseJsonLine,
+	portNumber,
+	positiveInteger,
+	sanitizeAgent,
 } from "./protocol.ts";
+import { decodeFrames, encodeFrame, type FrameCase, type FrameValue } from "./wire.ts";
 
 const DEFAULT_HISTORY_LIMIT = 500;
-const DEFAULT_MAX_LINE_BYTES = 1024 * 1024;
+const DEFAULT_MAX_FRAME_BYTES = 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
+const DEFAULT_HELLO_TIMEOUT_MS = 10_000;
+const DEFAULT_MAX_SOCKET_BUFFER_BYTES = 16 * 1024 * 1024;
+
+type ServerState = "idle" | "starting" | "listening" | "closing";
+
+type PresenceAction = "join" | "leave" | "update";
+
+export type PiBusServerLogger = (...args: unknown[]) => void;
+
+export interface PiBusServerOptions {
+	host?: string;
+	port?: number | string;
+	socketPath?: string;
+	token?: string;
+	historyLimit?: number | string;
+	maxFrameBytes?: number | string;
+	maxLineBytes?: number | string;
+	heartbeatMs?: number | string;
+	helloTimeoutMs?: number | string;
+	maxSocketBufferBytes?: number | string;
+	serverId?: string;
+	verbose?: boolean;
+	logger?: PiBusServerLogger;
+}
+
+export interface PiBusClientErrorEvent {
+	connectionId: string;
+	agentId?: string;
+	error: Error;
+}
+
+export interface PiBusServerEvents {
+	event: [BusEvent];
+	presence: [Presence];
+	client_error: [PiBusClientErrorEvent];
+}
+
+interface ConnectedClient {
+	connectionId: string;
+	socket: net.Socket;
+	authenticated: boolean;
+	authAttempts: number;
+	agentId?: string;
+	name?: string;
+	cwd?: string;
+	sessionId?: string;
+	sessionFile?: string;
+	model?: string;
+	pid?: number;
+	rooms: Set<string>;
+	topics: Set<string>;
+	connectedAtMs: number;
+	lastSeenAtMs: number;
+	buffer: Buffer;
+	helloTimer?: ReturnType<typeof setTimeout>;
+	closing: boolean;
+}
 
 export class PiBusServer extends EventEmitter {
-	[key: string]: any;
+	readonly host: string;
+	readonly port: number;
+	readonly socketPath?: string;
+	readonly token?: string;
+	readonly historyLimit: number;
+	readonly maxFrameBytes: number;
+	readonly heartbeatMs: number;
+	readonly helloTimeoutMs: number;
+	readonly maxSocketBufferBytes: number;
+	readonly serverId: string;
+	readonly verbose: boolean;
+	readonly logger?: PiBusServerLogger;
 
-	constructor(options: any = {}) {
+	#server: net.Server;
+	#clients = new Map<string, ConnectedClient>();
+	#history: BusEvent[] = [];
+	#heartbeatTimer?: ReturnType<typeof setInterval>;
+	#listenPromise?: Promise<this>;
+	#state: ServerState = "idle";
+
+	constructor(options: PiBusServerOptions = {}) {
 		super();
 		this.host = options.host ?? DEFAULT_HOST;
-		this.port = Number(options.port ?? DEFAULT_PORT);
-		this.socketPath = options.socketPath;
-		this.token = options.token;
-		this.historyLimit = Number(options.historyLimit ?? DEFAULT_HISTORY_LIMIT);
-		this.maxLineBytes = Number(options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES);
-		this.heartbeatMs = Number(options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS);
+		this.port = portNumber(options.port, DEFAULT_PORT, "port", true);
+		this.socketPath = emptyToUndefined(options.socketPath);
+		this.token = emptyToUndefined(options.token);
+		this.historyLimit = positiveInteger(options.historyLimit, DEFAULT_HISTORY_LIMIT, "historyLimit");
+		this.maxFrameBytes = positiveInteger(options.maxFrameBytes ?? options.maxLineBytes, DEFAULT_MAX_FRAME_BYTES, "maxFrameBytes");
+		this.heartbeatMs = positiveInteger(options.heartbeatMs, DEFAULT_HEARTBEAT_MS, "heartbeatMs");
+		this.helloTimeoutMs = positiveInteger(options.helloTimeoutMs, DEFAULT_HELLO_TIMEOUT_MS, "helloTimeoutMs");
+		this.maxSocketBufferBytes = positiveInteger(options.maxSocketBufferBytes, DEFAULT_MAX_SOCKET_BUFFER_BYTES, "maxSocketBufferBytes");
 		this.serverId = options.serverId ?? `${os.hostname()}-${process.pid}-${makeId("server")}`;
 		this.verbose = Boolean(options.verbose);
-		this.clients = new Map();
-		this.history = [];
-		this.server = net.createServer((socket) => this.#onConnection(socket));
-		this.heartbeatTimer = undefined;
+		this.logger = options.logger;
+		this.#server = net.createServer((socket) => this.#onConnection(socket));
 	}
 
-	listen() {
-		if (this.heartbeatTimer) return Promise.resolve(this);
-		return new Promise((resolve, reject) => {
-			const onError = (error) => {
-				this.server.off("listening", onListening);
+	on<K extends keyof PiBusServerEvents>(eventName: K, listener: (...args: PiBusServerEvents[K]) => void): this;
+	on(eventName: string | symbol, listener: (...args: unknown[]) => void): this {
+		return super.on(eventName, listener);
+	}
+
+	once<K extends keyof PiBusServerEvents>(eventName: K, listener: (...args: PiBusServerEvents[K]) => void): this;
+	once(eventName: string | symbol, listener: (...args: unknown[]) => void): this {
+		return super.once(eventName, listener);
+	}
+
+	off<K extends keyof PiBusServerEvents>(eventName: K, listener: (...args: PiBusServerEvents[K]) => void): this;
+	off(eventName: string | symbol, listener: (...args: unknown[]) => void): this {
+		return super.off(eventName, listener);
+	}
+
+	listen(): Promise<this> {
+		if (this.#state === "listening") return Promise.resolve(this);
+		if (this.#state === "starting" && this.#listenPromise) return this.#listenPromise;
+		if (this.#state === "closing") return Promise.reject(new Error("PiBus server is closing"));
+
+		this.#state = "starting";
+		this.#listenPromise = new Promise<this>((resolve, reject) => {
+			const cleanup = () => {
+				this.#server.off("error", onError);
+				this.#server.off("listening", onListening);
+			};
+			const onError = (error: Error) => {
+				cleanup();
+				this.#state = "idle";
+				this.#listenPromise = undefined;
 				reject(error);
 			};
 			const onListening = () => {
-				this.server.off("error", onError);
-				this.heartbeatTimer = setInterval(() => this.#heartbeat(), this.heartbeatMs).unref();
+				cleanup();
+				this.#state = "listening";
+				this.#listenPromise = undefined;
+				this.#startHeartbeat();
 				resolve(this);
 			};
-			this.server.once("error", onError);
-			this.server.once("listening", onListening);
-			if (this.socketPath) this.server.listen(this.socketPath);
-			else this.server.listen(this.port, this.host);
+			this.#server.once("error", onError);
+			this.#server.once("listening", onListening);
+			try {
+				if (this.socketPath) this.#server.listen(this.socketPath);
+				else this.#server.listen(this.port, this.host);
+			} catch (error) {
+				onError(error instanceof Error ? error : new Error(String(error)));
+			}
 		});
+		return this.#listenPromise;
 	}
 
-	close() {
-		if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-		this.heartbeatTimer = undefined;
-		for (const client of this.clients.values()) client.socket.destroy();
-		this.clients.clear();
-		return new Promise<void>((resolve) => this.server.close(() => resolve()));
+	async close(): Promise<void> {
+		if (this.#state === "starting" && this.#listenPromise) {
+			try {
+				await this.#listenPromise;
+			} catch {
+				// A failed listen already reset state to idle.
+			}
+		}
+		if (this.#heartbeatTimer) clearInterval(this.#heartbeatTimer);
+		this.#heartbeatTimer = undefined;
+		this.#state = "closing";
+		for (const client of [...this.#clients.values()]) {
+			client.closing = true;
+			clearTimeout(client.helloTimer);
+			client.socket.destroy();
+		}
+
+		await new Promise<void>((resolve, reject) => {
+			if (!this.#server.listening) {
+				resolve();
+				return;
+			}
+			this.#server.close((error?: Error) => {
+				if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") reject(error);
+				else resolve();
+			});
+		});
+
+		this.#clients.clear();
+		this.#state = "idle";
 	}
 
-	address() {
-		return this.server.address();
+	address(): net.AddressInfo | string | null {
+		return this.#server.address();
 	}
 
-	getPeers() {
-		return [...this.clients.values()].filter((client) => client.authenticated).map((client) => compactPeer(client));
+	getPeers(): Peer[] {
+		return [...this.#clients.values()].filter((client) => client.authenticated).map((client) => this.#compactPeer(client));
 	}
 
-	#log(...args) {
-		if (this.verbose) console.error("[pi-bus]", ...args);
+	#startHeartbeat(): void {
+		if (this.#heartbeatTimer) clearInterval(this.#heartbeatTimer);
+		this.#heartbeatTimer = setInterval(() => this.#heartbeat(), this.heartbeatMs);
+		this.#heartbeatTimer.unref?.();
 	}
 
-	#onConnection(socket) {
+	#onConnection(socket: net.Socket): void {
 		const connectionId = makeId("conn");
-		const client = {
+		const now = Date.now();
+		const client: ConnectedClient = {
 			connectionId,
 			socket,
 			authenticated: false,
-			agentId: undefined,
-			name: undefined,
-			cwd: undefined,
-			sessionId: undefined,
-			sessionFile: undefined,
-			model: undefined,
-			pid: undefined,
+			authAttempts: 0,
 			rooms: new Set([DEFAULT_ROOM]),
 			topics: new Set(["*"]),
-			connectedAt: nowIso(),
-			lastSeenAt: nowIso(),
-			buffer: "",
-			write: (record) => {
-				if (socket.destroyed || !socket.writable) return false;
-				return socket.write(frame(record));
-			},
+			connectedAtMs: now,
+			lastSeenAtMs: now,
+			buffer: Buffer.alloc(0),
+			closing: false,
 		};
-		this.clients.set(connectionId, client);
+		client.helloTimer = setTimeout(() => {
+			if (!client.authenticated && !client.closing) this.#sendError(client, "", "PiBus hello timeout", true, "hello_timeout");
+		}, this.helloTimeoutMs);
+		client.helloTimer.unref?.();
+
+		this.#clients.set(connectionId, client);
 		this.#log("connection", connectionId, socket.remoteAddress ?? "local");
 
-		socket.setEncoding("utf8");
-		socket.on("data", (chunk) => this.#onData(client, chunk));
+		socket.on("data", (chunk: Buffer | string) => this.#onData(client, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
 		socket.on("close", () => this.#onClose(client));
-		socket.on("error", (error) => this.#log("socket error", connectionId, error.message));
+		socket.on("error", (error: Error) => this.#onSocketError(client, error));
 	}
 
-	#onData(client, chunk) {
-		client.buffer += chunk;
-		if (Buffer.byteLength(client.buffer, "utf8") > this.maxLineBytes) {
-			this.#sendError(client, undefined, `Input line exceeded ${this.maxLineBytes} bytes`, true);
-			return;
-		}
+	#onSocketError(client: ConnectedClient, error: Error): void {
+		this.#log("socket error", client.connectionId, error.message);
+		this.#emit("client_error", { connectionId: client.connectionId, agentId: client.agentId, error });
+	}
 
-		while (true) {
-			const newlineIndex = client.buffer.indexOf("\n");
-			if (newlineIndex === -1) break;
-			const line = client.buffer.slice(0, newlineIndex);
-			client.buffer = client.buffer.slice(newlineIndex + 1);
-			let message;
-			try {
-				message = parseJsonLine(line);
-			} catch (error) {
-				this.#sendError(client, undefined, `Invalid JSON: ${error.message}`);
-				continue;
-			}
-			if (message !== undefined) this.#handleMessage(client, message);
+	#onData(client: ConnectedClient, chunk: Buffer): void {
+		if (client.closing || client.socket.destroyed) return;
+		client.buffer = Buffer.concat([client.buffer, chunk]);
+		try {
+			const decoded = decodeFrames(client.buffer, this.maxFrameBytes);
+			client.buffer = decoded.rest;
+			for (const frame of decoded.frames) this.#handleFrame(client, frame);
+		} catch (error) {
+			client.buffer = Buffer.alloc(0);
+			client.closing = true;
+			const message = error instanceof Error ? error.message : String(error);
+			this.#sendError(client, "", message, true, "invalid_frame");
 		}
 	}
 
-	#handleMessage(client, message) {
-		if (!isPlainObject(message) || typeof message.type !== "string") {
-			this.#sendError(client, message?.id, "Message must be an object with a string type");
+	#handleFrame(client: ConnectedClient, frame: Frame): void {
+		const body = frame.body;
+		if (!body.case) {
+			this.#sendError(client, "", "Empty protobuf frame", false, "invalid_frame");
 			return;
 		}
-		client.lastSeenAt = nowIso();
+		client.lastSeenAtMs = Date.now();
 
-		switch (message.type) {
+		switch (body.case) {
 			case "hello":
-				this.#handleHello(client, message);
+				this.#handleHello(client, body.value);
 				break;
 			case "publish":
-				this.#requireAuth(client, message, () => this.#handlePublish(client, message));
+				this.#requireAuth(client, body.value.id, () => this.#handlePublish(client, body.value));
 				break;
 			case "subscribe":
-				this.#requireAuth(client, message, () => this.#handleSubscribe(client, message));
+				this.#requireAuth(client, body.value.id, () => this.#handleSubscribe(client, body.value));
 				break;
-			case "history":
-				this.#requireAuth(client, message, () => this.#handleHistory(client, message));
+			case "historyRequest":
+				this.#requireAuth(client, body.value.id, () => this.#handleHistory(client, body.value));
 				break;
-			case "peers":
-				this.#requireAuth(client, message, () => this.#handlePeers(client, message));
+			case "peersRequest":
+				this.#requireAuth(client, body.value.id, () => this.#handlePeers(client, body.value.id));
 				break;
 			case "ping":
-				client.write({ type: "pong", id: message.id, now: nowIso() });
+				this.#write(client, "pong", { id: body.value.id, now: nowIso() });
 				break;
 			case "pong":
 				break;
-			default:
-				this.#sendError(client, message.id, `Unknown message type: ${message.type}`);
+			case "welcome":
+			case "historyResponse":
+			case "peersResponse":
+			case "event":
+			case "presence":
+			case "ack":
+			case "error":
+				this.#sendError(client, frameId(body.value), `Unexpected client frame: ${body.case}`, false, "unexpected_frame");
+				break;
 		}
 	}
 
-	#requireAuth(client, message, fn) {
+	#requireAuth(client: ConnectedClient, id: string, fn: () => void): void {
 		if (!client.authenticated) {
-			this.#sendError(client, message.id, "Client must send hello before using the bus");
+			this.#sendError(client, id, "Client must send hello before using the bus", false, "not_authenticated");
 			return;
 		}
 		fn();
 	}
 
-	#handleHello(client, message) {
-		if (message.protocol && message.protocol !== PROTOCOL_VERSION) {
-			this.#sendError(client, message.id, `Unsupported protocol ${message.protocol}; expected ${PROTOCOL_VERSION}`, true);
+	#handleHello(client: ConnectedClient, message: Hello): void {
+		client.authAttempts += 1;
+		if (client.authenticated) {
+			this.#sendError(client, message.id, "Client is already authenticated", true, "already_authenticated");
+			return;
+		}
+		if (message.protocol !== PROTOCOL_VERSION) {
+			this.#sendError(client, message.id, `Unsupported protocol ${message.protocol || "(missing)"}; expected ${PROTOCOL_VERSION}`, true, "unsupported_protocol");
 			return;
 		}
 		if (this.token && message.token !== this.token) {
-			this.#sendError(client, message.id, "Invalid PiBus token", true);
+			this.#sendError(client, message.id, "Invalid PiBus token", true, "invalid_token");
 			return;
 		}
 
-		const agent = isPlainObject(message.agent) ? message.agent : {};
-		client.agentId = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : makeId("agent");
-		client.name = typeof agent.name === "string" && agent.name.trim() ? agent.name.trim() : client.agentId;
-		client.cwd = typeof agent.cwd === "string" ? agent.cwd : undefined;
-		client.sessionId = typeof agent.sessionId === "string" ? agent.sessionId : undefined;
-		client.sessionFile = typeof agent.sessionFile === "string" ? agent.sessionFile : undefined;
-		client.model = typeof agent.model === "string" ? agent.model : undefined;
-		client.pid = Number.isFinite(agent.pid) ? agent.pid : undefined;
+		const agent = sanitizeAgent(message.agent);
+		if (this.#isDuplicateAgentId(client.connectionId, agent.id)) {
+			this.#sendError(client, message.id, `Agent id is already connected: ${agent.id}`, true, "duplicate_agent_id");
+			return;
+		}
+
+		client.agentId = agent.id;
+		client.name = agent.name;
+		client.cwd = emptyToUndefined(agent.cwd);
+		client.sessionId = emptyToUndefined(agent.sessionId);
+		client.sessionFile = emptyToUndefined(agent.sessionFile);
+		client.model = emptyToUndefined(agent.model);
+		client.pid = agent.pid > 0 ? agent.pid : undefined;
 		client.rooms = new Set(normalizeRooms(message.rooms));
 		client.topics = new Set(normalizeTopics(message.topics));
 		client.authenticated = true;
-		client.lastSeenAt = nowIso();
+		client.lastSeenAtMs = Date.now();
+		clearTimeout(client.helloTimer);
 
-		client.write({
-			type: "welcome",
+		this.#write(client, "welcome", {
 			id: message.id,
 			protocol: PROTOCOL_VERSION,
 			serverId: this.serverId,
@@ -218,49 +377,33 @@ export class PiBusServer extends EventEmitter {
 		this.#log("hello", client.agentId, client.name, [...client.rooms].join(","), [...client.topics].join(","));
 	}
 
-	#handlePublish(client, message) {
-		const source = isPlainObject(message.event) ? message.event : message;
-		const topic = typeof source.topic === "string" && source.topic.trim() ? source.topic.trim() : DEFAULT_TOPIC;
-		const room = typeof source.room === "string" && source.room.trim() ? source.room.trim() : [...client.rooms][0] ?? DEFAULT_ROOM;
-		if (!client.rooms.has("*") && !client.rooms.has(room)) {
-			this.#sendError(client, message.id, `Client is not joined to room: ${room}`);
+	#handlePublish(client: ConnectedClient, message: Publish): void {
+		const defaultRoom = this.#defaultRoomFor(client);
+		const from = create(PeerRefSchema, {
+			connectionId: client.connectionId,
+			agentId: client.agentId ?? "",
+			name: client.name ?? client.agentId ?? client.connectionId,
+		});
+		const event = normalizeBusEvent(message.event, { defaultRoom, defaultTopic: DEFAULT_TOPIC, from, createdAt: nowIso() });
+		if (!client.rooms.has("*") && !client.rooms.has(event.room)) {
+			this.#sendError(client, message.id, `Client is not joined to room: ${event.room}`, false, "room_not_joined");
 			return;
 		}
-		const target = normalizeTarget(source.target);
-		const event = {
-			id: typeof source.id === "string" && source.id.trim() ? source.id.trim() : makeId("evt"),
-			room,
-			topic,
-			from: {
-				connectionId: client.connectionId,
-				agentId: client.agentId,
-				name: client.name,
-			},
-			target,
-			text: typeof source.text === "string" ? source.text : undefined,
-			payload: source.payload,
-			priority: typeof source.priority === "string" ? source.priority : "normal",
-			createdAt: nowIso(),
-			causeId: typeof source.causeId === "string" ? source.causeId : undefined,
-			meta: isPlainObject(source.meta) ? source.meta : undefined,
-		};
-		if (!event.text) event.text = messageTextFromEvent(event);
 
 		this.#storeHistory(event);
 		const recipients = this.#deliverEvent(event, {
 			sourceClient: client,
-			includeSelf: Boolean(message.includeSelf ?? source.includeSelf),
+			includeSelf: message.includeSelf,
 		});
-		client.write({ type: "ack", id: message.id, command: "publish", eventId: event.id, recipients });
-		this.emit("event", event);
+		this.#write(client, "ack", { id: message.id, command: "publish", eventId: event.id, recipients });
+		this.#emit("event", event);
 		this.#log("publish", event.id, event.room, event.topic, "recipients", recipients);
 	}
 
-	#handleSubscribe(client, message) {
-		if (message.rooms !== undefined) client.rooms = new Set(normalizeRooms(message.rooms));
-		if (message.topics !== undefined) client.topics = new Set(normalizeTopics(message.topics));
-		client.write({
-			type: "ack",
+	#handleSubscribe(client: ConnectedClient, message: Subscribe): void {
+		if (message.rooms.length > 0) client.rooms = new Set(normalizeRooms(message.rooms));
+		if (message.topics.length > 0) client.topics = new Set(normalizeTopics(message.topics));
+		this.#write(client, "ack", {
 			id: message.id,
 			command: "subscribe",
 			rooms: [...client.rooms],
@@ -269,92 +412,170 @@ export class PiBusServer extends EventEmitter {
 		this.#broadcastPresence("update", client);
 	}
 
-	#handleHistory(client, message) {
-		let events = this.history;
-		const requestedRoom = typeof message.room === "string" && message.room.trim() ? message.room.trim() : undefined;
+	#handleHistory(client: ConnectedClient, message: HistoryRequest): void {
+		let events = this.#history;
+		const requestedRoom = message.room.trim() || undefined;
 		if (requestedRoom && !client.rooms.has("*") && !client.rooms.has(requestedRoom)) {
-			this.#sendError(client, message.id, `Client is not joined to room: ${requestedRoom}`);
+			this.#sendError(client, message.id, `Client is not joined to room: ${requestedRoom}`, false, "room_not_joined");
 			return;
 		}
 		if (requestedRoom) events = events.filter((event) => event.room === requestedRoom);
 		else if (!client.rooms.has("*")) events = events.filter((event) => client.rooms.has(event.room));
-		if (typeof message.topic === "string" && message.topic.trim()) events = events.filter((event) => matchTopic(message.topic, event.topic));
-		if (typeof message.since === "string" && message.since.trim()) {
+		if (message.topic.trim()) events = events.filter((event) => matchTopic(message.topic, event.topic));
+		if (message.since.trim()) {
 			const since = Date.parse(message.since);
 			if (!Number.isNaN(since)) events = events.filter((event) => Date.parse(event.createdAt) > since);
 		}
-		const limit = Math.max(1, Math.min(Number(message.limit ?? 50), this.historyLimit));
-		client.write({ type: "history", id: message.id, events: events.slice(-limit) });
+		const limit = Math.max(1, Math.min(message.limit || 50, this.historyLimit));
+		this.#write(client, "historyResponse", { id: message.id, events: events.slice(-limit) });
 	}
 
-	#handlePeers(client, message) {
-		client.write({ type: "peers", id: message.id, peers: this.getPeers() });
+	#handlePeers(client: ConnectedClient, id: string): void {
+		this.#write(client, "peersResponse", { id, peers: this.getPeers() });
 	}
 
-	#storeHistory(event) {
-		this.history.push(event);
-		if (this.history.length > this.historyLimit) this.history.splice(0, this.history.length - this.historyLimit);
+	#storeHistory(event: BusEvent): void {
+		this.#history.push(event);
+		if (this.#history.length > this.historyLimit) this.#history.splice(0, this.#history.length - this.historyLimit);
 	}
 
-	#deliverEvent(event, { sourceClient, includeSelf }) {
+	#deliverEvent(event: BusEvent, { sourceClient, includeSelf }: { sourceClient: ConnectedClient; includeSelf: boolean }): number {
 		let recipients = 0;
-		for (const client of this.clients.values()) {
+		for (const client of this.#clients.values()) {
 			if (!client.authenticated) continue;
-			if (!includeSelf && sourceClient && client.connectionId === sourceClient.connectionId) continue;
+			if (!includeSelf && client.connectionId === sourceClient.connectionId) continue;
 			if (!this.#clientWantsEvent(client, event)) continue;
-			client.write({ type: "event", event });
-			recipients++;
+			if (this.#write(client, "event", event)) recipients++;
 		}
 		return recipients;
 	}
 
-	#clientWantsEvent(client, event) {
+	#clientWantsEvent(client: ConnectedClient, event: BusEvent): boolean {
 		const target = normalizeTarget(event.target);
 		if (target.length > 0) {
-			return target.includes(client.agentId) || target.includes(client.name) || target.includes(client.connectionId);
+			return target.includes(client.agentId ?? "") || target.includes(client.name ?? "") || target.includes(client.connectionId);
 		}
 		if (!client.rooms.has("*") && !client.rooms.has(event.room)) return false;
 		for (const topic of client.topics) if (matchTopic(topic, event.topic)) return true;
 		return false;
 	}
 
-	#broadcastPresence(action, client) {
-		if (!client.authenticated) return;
-		const record = { type: "presence", action, peer: compactPeer(client), now: nowIso() };
-		for (const other of this.clients.values()) {
+	#broadcastPresence(action: PresenceAction, client: ConnectedClient): void {
+		if (!client.authenticated || this.#state === "closing") return;
+		const record = create(PresenceSchema, { action, peer: this.#compactPeer(client), now: nowIso() });
+		for (const other of this.#clients.values()) {
 			if (!other.authenticated || other.connectionId === client.connectionId) continue;
-			other.write(record);
+			this.#write(other, "presence", record);
 		}
-		this.emit("presence", record);
+		this.#emit("presence", record);
 	}
 
-	#onClose(client) {
-		this.clients.delete(client.connectionId);
-		if (client.authenticated) this.#broadcastPresence("leave", client);
+	#onClose(client: ConnectedClient): void {
+		client.closing = true;
+		clearTimeout(client.helloTimer);
+		const existed = this.#clients.delete(client.connectionId);
+		if (existed && client.authenticated) this.#broadcastPresence("leave", client);
 		this.#log("disconnect", client.connectionId, client.agentId ?? "unknown");
 	}
 
-	#sendError(client, id, error, fatal = false) {
-		client.write({ type: "error", id, error, fatal });
-		if (fatal) client.socket.destroy();
+	#sendError(client: ConnectedClient, id: string, error: string, fatal = false, code = "server_error"): void {
+		this.#write(client, "error", { id, error, fatal, code });
+		if (fatal) {
+			client.closing = true;
+			client.socket.destroy();
+		}
 	}
 
-	#heartbeat() {
+	#write<C extends FrameCase>(client: ConnectedClient, caseName: C, value: FrameValue<C>): boolean {
+		if (client.socket.destroyed || !client.socket.writable) return false;
+		try {
+			client.socket.write(encodeFrame(caseName, value));
+			if (client.socket.writableLength > this.maxSocketBufferBytes) {
+				const error = new Error(`PiBus socket buffer exceeded ${this.maxSocketBufferBytes} bytes`);
+				this.#onSocketError(client, error);
+				client.closing = true;
+				client.socket.destroy(error);
+				return false;
+			}
+			return true;
+		} catch (error) {
+			const realError = error instanceof Error ? error : new Error(String(error));
+			this.#onSocketError(client, realError);
+			client.closing = true;
+			client.socket.destroy(realError);
+			return false;
+		}
+	}
+
+	#heartbeat(): void {
 		const now = Date.now();
-		for (const client of this.clients.values()) {
-			if (!client.authenticated) continue;
-			const lastSeen = Date.parse(client.lastSeenAt);
-			if (Number.isFinite(lastSeen) && now - lastSeen > this.heartbeatMs * 4) {
+		for (const client of this.#clients.values()) {
+			if (client.closing) continue;
+			if (!client.authenticated) {
+				if (now - client.connectedAtMs > this.helloTimeoutMs) this.#sendError(client, "", "PiBus hello timeout", true, "hello_timeout");
+				continue;
+			}
+			if (now - client.lastSeenAtMs > this.heartbeatMs * 4) {
+				client.closing = true;
 				client.socket.destroy();
 				continue;
 			}
-			client.write({ type: "ping", now: nowIso() });
+			this.#write(client, "ping", { now: nowIso() });
 		}
+	}
+
+	#compactPeer(client: ConnectedClient): Peer {
+		return compactPeer({
+			connectionId: client.connectionId,
+			agentId: client.agentId,
+			name: client.name,
+			rooms: client.rooms,
+			topics: client.topics,
+			cwd: client.cwd,
+			sessionId: client.sessionId,
+			sessionFile: client.sessionFile,
+			model: client.model,
+			pid: client.pid,
+			connectedAt: new Date(client.connectedAtMs).toISOString(),
+			lastSeenAt: new Date(client.lastSeenAtMs).toISOString(),
+		});
+	}
+
+	#defaultRoomFor(client: ConnectedClient): string {
+		return client.rooms.has(DEFAULT_ROOM) ? DEFAULT_ROOM : [...client.rooms][0] ?? DEFAULT_ROOM;
+	}
+
+	#isDuplicateAgentId(connectionId: string, agentId: string): boolean {
+		for (const client of this.#clients.values()) {
+			if (client.connectionId !== connectionId && client.authenticated && client.agentId === agentId) return true;
+		}
+		return false;
+	}
+
+	#emit<K extends keyof PiBusServerEvents>(eventName: K, ...args: PiBusServerEvents[K]): boolean {
+		return super.emit(eventName, ...args);
+	}
+
+	#log(...args: unknown[]): void {
+		if (this.logger) this.logger(...args);
+		else if (this.verbose) console.log("[pi-bus]", ...args);
 	}
 }
 
-export async function createAndListen(options = {}) {
+export async function createAndListen(options: PiBusServerOptions = {}): Promise<PiBusServer> {
 	const server = new PiBusServer(options);
 	await server.listen();
 	return server;
+}
+
+function emptyToUndefined(value: string | undefined): string | undefined {
+	return value && value.length > 0 ? value : undefined;
+}
+
+function frameId(value: unknown): string {
+	if (typeof value === "object" && value !== null && "id" in value) {
+		const id = (value as { id?: unknown }).id;
+		return typeof id === "string" ? id : "";
+	}
+	return "";
 }

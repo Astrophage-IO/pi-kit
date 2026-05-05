@@ -1,8 +1,10 @@
 {
   "name": "@astrophage-io/pi-bus",
   "version": "0.1.0",
-  "description": "A lightweight bidirectional event bus for coordinating multiple pi coding agents.",
+  "description": "A protobuf-framed bidirectional event bus for coordinating isolated pi coding agents.",
   "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "bin": {
     "pi-bus": "./bin/pi-bus.ts",
     "pi-bus-server": "./bin/pi-bus-server.ts",
@@ -10,18 +12,47 @@
     "pibus-server": "./bin/pi-bus-server.ts"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./client": "./src/client.ts",
-    "./server": "./src/server.ts",
-    "./protocol": "./src/protocol.ts",
-    "./extension": "./extensions/pi-bus.ts"
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./client": {
+      "types": "./src/client.ts",
+      "bun": "./src/client.ts",
+      "default": "./src/client.ts"
+    },
+    "./server": {
+      "types": "./src/server.ts",
+      "bun": "./src/server.ts",
+      "default": "./src/server.ts"
+    },
+    "./protocol": {
+      "types": "./src/protocol.ts",
+      "bun": "./src/protocol.ts",
+      "default": "./src/protocol.ts"
+    },
+    "./extension": {
+      "types": "./extensions/pi-bus.ts",
+      "bun": "./extensions/pi-bus.ts",
+      "default": "./extensions/pi-bus.ts"
+    }
   },
+  "files": [
+    "bin",
+    "extensions",
+    "src",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
   "keywords": [
     "pi-package",
     "pi",
     "agent",
     "event-bus",
-    "multi-agent"
+    "multi-agent",
+    "protobuf"
   ],
   "pi": {
     "extensions": [
@@ -33,14 +64,31 @@
     "test:pi": "bun run test/pi-rpc-smoke.ts",
     "start": "bun run bin/pi-bus-server.ts"
   },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.12.0"
+  },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*",
-    "typebox": "*"
+    "@mariozechner/pi-coding-agent": "^0.73.0",
+    "@mariozechner/pi-tui": "^0.73.0",
+    "typebox": "^1.1.0"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.73.0",
+    "@mariozechner/pi-coding-agent": "^0.73.0",
+    "@mariozechner/pi-tui": "^0.73.0",
+    "typebox": "^1.1.37"
   },
   "engines": {
     "bun": ">=1.0.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/Astrophage-IO/pi-kit.git",
+    "directory": "packages/pi-bus"
+  },
+  "homepage": "https://github.com/Astrophage-IO/pi-kit/tree/main/packages/pi-bus#readme",
+  "bugs": {
+    "url": "https://github.com/Astrophage-IO/pi-kit/issues"
+  }
 }

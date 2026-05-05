@@ -3,21 +3,20 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
-import { PiBusClient } from "../src/client.ts";
-import { DEFAULT_HOST, DEFAULT_PORT, DEFAULT_ROOM, DEFAULT_TOPIC, messageTextFromEvent, splitCsv } from "../src/protocol.ts";
-
-type BusEvent = {
-	id: string;
-	room: string;
-	topic: string;
-	from?: { connectionId?: string; agentId?: string; name?: string };
-	target?: string[];
-	text?: string;
-	payload?: unknown;
-	priority?: string;
-	createdAt?: string;
-	meta?: Record<string, unknown>;
-};
+import { PiBusClient, type PiBusClientErrorEvent, type ReconnectingEvent } from "../src/client.ts";
+import {
+	DEFAULT_HOST,
+	DEFAULT_PORT,
+	DEFAULT_ROOM,
+	DEFAULT_TOPIC,
+	messageTextFromEvent,
+	metaBoolValue,
+	splitCsv,
+	type BusEvent,
+	type Peer,
+	type Presence,
+	type Welcome,
+} from "../src/protocol.ts";
 
 const MAX_INBOX = 200;
 const DEFAULT_TOPICS = "*";
@@ -58,7 +57,7 @@ function safeJson(value: unknown): string {
 }
 
 function eventText(event: BusEvent): string {
-	return messageTextFromEvent(event as any) || "(no message text)";
+	return messageTextFromEvent(event) || "(no message text)";
 }
 
 function fromLabel(event: BusEvent): string {
@@ -169,7 +168,7 @@ export default function piBusExtension(pi: ExtensionAPI) {
 	let connectPromise: Promise<void> | undefined;
 	let inbox: BusEvent[] = [];
 	let unread = new Set<string>();
-	let peers: any[] = [];
+	let peers: Peer[] = [];
 	let config = {
 		agentId: PROCESS_AGENT_ID,
 		agentName: PROCESS_AGENT_ID,
@@ -211,10 +210,12 @@ export default function piBusExtension(pi: ExtensionAPI) {
 		if (!event || event.from?.agentId === config.agentId) return;
 		remember(event);
 		const addressed = isAddressedTo(event, config.agentId, config.agentName, client?.connectionId);
-		const pushRequested = event.meta?.push === true || event.meta?.trigger === true;
-		const pushSuppressed = event.meta?.push === false;
+		const pushHint = event.hints?.push ?? metaBoolValue(event.meta?.push);
+		const triggerHint = event.hints?.trigger ?? metaBoolValue(event.meta?.trigger);
+		const pushRequested = pushHint === true || triggerHint === true;
+		const pushSuppressed = pushHint === false;
 		const shouldPush = !pushSuppressed && (pushRequested || config.pushMode === "all" || (config.pushMode === "targeted" && addressed));
-		const shouldTrigger = shouldPush && (event.meta?.trigger === true || config.triggerMode === "all" || (config.triggerMode === "targeted" && addressed));
+		const shouldTrigger = shouldPush && (triggerHint === true || config.triggerMode === "all" || (config.triggerMode === "targeted" && addressed));
 		if (currentCtx?.hasUI) {
 			const kind = shouldPush ? "pushed" : "buffered";
 			if (addressed || shouldPush) currentCtx.ui.notify(`PiBus ${kind} from ${fromLabel(event)}: ${eventText(event).slice(0, 120)}`, "info");
@@ -269,20 +270,20 @@ export default function piBusExtension(pi: ExtensionAPI) {
 			reconnect: true,
 		});
 
-		client.on("online", (welcome: any) => {
-			peers = Array.isArray(welcome.peers) ? welcome.peers : [];
+		client.on("online", (welcome: Welcome) => {
+			peers = welcome.peers;
 			updateStatus(`online ${config.rooms.join(",")}`);
 			ctx.ui.notify(`PiBus connected as ${config.agentName} (${config.agentId})`, "info");
 		});
 		client.on("offline", () => updateStatus("offline"));
-		client.on("reconnecting", ({ delay }: any) => updateStatus(`reconnecting in ${Math.round(delay / 1000)}s`));
-		client.on("presence", (message: any) => {
+		client.on("reconnecting", ({ delay }: ReconnectingEvent) => updateStatus(`reconnecting in ${Math.round(delay / 1000)}s`));
+		client.on("presence", (message: Presence) => {
 			peers = client?.peers ?? peers;
 			if (ctx.hasUI && message.action === "join") ctx.ui.notify(`PiBus peer joined: ${message.peer?.name ?? message.peer?.agentId}`, "info");
 		});
-		client.on("peers", (items: any[]) => (peers = items));
+		client.on("peers", (items: Peer[]) => (peers = items));
 		client.on("bus_event", handleIncoming);
-		client.on("bus_error", (message: any) => ctx.ui.notify(`PiBus error: ${message.error ?? safeJson(message)}`, "error"));
+		client.on("bus_error", (message: PiBusClientErrorEvent) => ctx.ui.notify(`PiBus error: ${message.error ?? safeJson(message)}`, "error"));
 
 		updateStatus("connecting");
 		connectPromise = client
@@ -403,9 +404,10 @@ export default function piBusExtension(pi: ExtensionAPI) {
 				return;
 			}
 			const parts = trimmed.split(/\s+/);
-			const topic = parts.length > 1 && parts[0].includes(".") ? parts.shift()! : DEFAULT_TOPIC;
+			const firstPart = parts[0];
+			const topic = parts.length > 1 && firstPart?.includes(".") ? parts.shift()! : DEFAULT_TOPIC;
 			const text = parts.join(" ");
-			const ack = await c.publish({ room: config.rooms[0] ?? DEFAULT_ROOM, topic, text, meta: { push: true } });
+			const ack = await c.publish({ room: config.rooms[0] ?? DEFAULT_ROOM, topic, text, hints: { push: true } });
 			ctx.ui.notify(`Published ${ack.eventId} to ${ack.recipients} peer(s)`, "info");
 		},
 	});
@@ -482,7 +484,7 @@ export default function piBusExtension(pi: ExtensionAPI) {
 					text: params.text,
 					target: params.target,
 					priority: params.priority ?? "normal",
-					meta: { push: params.push ?? true, trigger: params.trigger ?? false },
+					hints: { push: params.push ?? true, trigger: params.trigger ?? false },
 				},
 				{ includeSelf: params.includeSelf ?? false },
 			);

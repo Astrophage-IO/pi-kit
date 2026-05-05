@@ -1,0 +1,168 @@
+syntax = "proto3";
+
+package pi_bus.v1;
+
+message AgentIdentity {
+  string id = 1;
+  string name = 2;
+  string cwd = 3;
+  string session_id = 4;
+  string session_file = 5;
+  string model = 6;
+  uint32 pid = 7;
+  map<string, string> metadata = 8;
+}
+
+message ClientInfo {
+  string hostname = 1;
+  uint32 pid = 2;
+  string connected_at = 3;
+}
+
+message Peer {
+  string connection_id = 1;
+  string agent_id = 2;
+  string name = 3;
+  repeated string rooms = 4;
+  repeated string topics = 5;
+  string cwd = 6;
+  string session_id = 7;
+  string session_file = 8;
+  string model = 9;
+  uint32 pid = 10;
+  string connected_at = 11;
+  string last_seen_at = 12;
+}
+
+message PeerRef {
+  string connection_id = 1;
+  string agent_id = 2;
+  string name = 3;
+}
+
+message EventHints {
+  optional bool push = 1;
+  optional bool trigger = 2;
+}
+
+message BusEvent {
+  string id = 1;
+  string room = 2;
+  string topic = 3;
+  PeerRef from = 4;
+  repeated string target = 5;
+  string text = 6;
+  string payload_json = 7;
+  string priority = 8;
+  string created_at = 9;
+  string cause_id = 10;
+  EventHints hints = 11;
+  map<string, string> meta = 12;
+}
+
+message Hello {
+  string id = 1;
+  string protocol = 2;
+  string token = 3;
+  AgentIdentity agent = 4;
+  repeated string rooms = 5;
+  repeated string topics = 6;
+  ClientInfo client = 7;
+}
+
+message Welcome {
+  string id = 1;
+  string protocol = 2;
+  string server_id = 3;
+  string connection_id = 4;
+  string agent_id = 5;
+  repeated string rooms = 6;
+  repeated string topics = 7;
+  string now = 8;
+  repeated Peer peers = 9;
+}
+
+message Publish {
+  string id = 1;
+  BusEvent event = 2;
+  bool include_self = 3;
+}
+
+message Subscribe {
+  string id = 1;
+  repeated string rooms = 2;
+  repeated string topics = 3;
+}
+
+message HistoryRequest {
+  string id = 1;
+  string room = 2;
+  string topic = 3;
+  string since = 4;
+  uint32 limit = 5;
+}
+
+message HistoryResponse {
+  string id = 1;
+  repeated BusEvent events = 2;
+}
+
+message PeersRequest {
+  string id = 1;
+}
+
+message PeersResponse {
+  string id = 1;
+  repeated Peer peers = 2;
+}
+
+message Presence {
+  string action = 1;
+  Peer peer = 2;
+  string now = 3;
+}
+
+message Ack {
+  string id = 1;
+  string command = 2;
+  string event_id = 3;
+  uint32 recipients = 4;
+  repeated string rooms = 5;
+  repeated string topics = 6;
+}
+
+message Ping {
+  string id = 1;
+  string now = 2;
+}
+
+message Pong {
+  string id = 1;
+  string now = 2;
+}
+
+message Error {
+  string id = 1;
+  string error = 2;
+  bool fatal = 3;
+  string code = 4;
+}
+
+message Frame {
+  oneof body {
+    Hello hello = 1;
+    Welcome welcome = 2;
+    Publish publish = 3;
+    Subscribe subscribe = 4;
+    HistoryRequest history_request = 5;
+    HistoryResponse history_response = 6;
+    PeersRequest peers_request = 7;
+    PeersResponse peers_response = 8;
+    BusEvent event = 9;
+    Presence presence = 10;
+    Ack ack = 11;
+    Ping ping = 12;
+    Pong pong = 13;
+    Error error = 14;
+  }
+}

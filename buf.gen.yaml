@@ -1,0 +1,7 @@
+version: v2
+plugins:
+  - local: protoc-gen-es
+    out: packages/pi-bus/src/gen
+    opt: target=ts
+inputs:
+  - directory: proto
