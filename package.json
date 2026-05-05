@@ -1,0 +1,22 @@
+{
+  "name": "pi-kit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.8",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "bun test packages/*/test/*.test.ts",
+    "test:pi": "bun run packages/pi-bus/test/pi-rpc-smoke.ts",
+    "typecheck": "tsc --noEmit",
+    "pi-bus:start": "bun run packages/pi-bus/bin/pi-bus-server.ts",
+    "pi-bus": "bun run packages/pi-bus/bin/pi-bus.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.13",
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.3"
+  }
+}

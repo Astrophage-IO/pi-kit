@@ -1,0 +1,46 @@
+{
+  "name": "@astrophage-io/pi-bus",
+  "version": "0.1.0",
+  "description": "A lightweight bidirectional event bus for coordinating multiple pi coding agents.",
+  "type": "module",
+  "bin": {
+    "pi-bus": "./bin/pi-bus.ts",
+    "pi-bus-server": "./bin/pi-bus-server.ts",
+    "pibus": "./bin/pi-bus.ts",
+    "pibus-server": "./bin/pi-bus-server.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./server": "./src/server.ts",
+    "./protocol": "./src/protocol.ts",
+    "./extension": "./extensions/pi-bus.ts"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "agent",
+    "event-bus",
+    "multi-agent"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "scripts": {
+    "test": "bun test test/*.test.ts",
+    "test:pi": "bun run test/pi-rpc-smoke.ts",
+    "start": "bun run bin/pi-bus-server.ts"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "typebox": "*"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "license": "MIT"
+}
