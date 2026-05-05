@@ -21,7 +21,12 @@ type BusEvent = {
 
 const MAX_INBOX = 200;
 const DEFAULT_TOPICS = "*";
+const DEFAULT_PUSH_MODE = "all";
+const DEFAULT_TRIGGER_MODE = "targeted";
 const PROCESS_AGENT_ID = `${os.hostname()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+
+type PushMode = "off" | "targeted" | "all";
+type TriggerMode = PushMode;
 
 function envBool(name: string, fallback: boolean): boolean {
 	const value = process.env[name];
@@ -37,6 +42,11 @@ function flagString(pi: ExtensionAPI, name: string, fallback: string): string {
 function flagBool(pi: ExtensionAPI, name: string, fallback: boolean): boolean {
 	const value = pi.getFlag(name);
 	return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizePushMode(value: string | undefined, fallback: PushMode = DEFAULT_PUSH_MODE): PushMode {
+	if (value === "off" || value === "targeted" || value === "all") return value;
+	return fallback;
 }
 
 function safeJson(value: unknown): string {
@@ -97,7 +107,7 @@ function eventMatches(
 	return true;
 }
 
-export default function pibusExtension(pi: ExtensionAPI) {
+export default function piBusExtension(pi: ExtensionAPI) {
 	pi.registerFlag("bus-host", {
 		description: "PiBus broker host",
 		type: "string",
@@ -143,15 +153,15 @@ export default function pibusExtension(pi: ExtensionAPI) {
 		type: "boolean",
 		default: envBool("PIBUS_AUTOSTART", true),
 	});
-	pi.registerFlag("bus-inject-broadcast", {
-		description: "Inject broadcast PiBus events into this agent's conversation context",
-		type: "boolean",
-		default: envBool("PIBUS_INJECT_BROADCAST", true),
+	pi.registerFlag("bus-push", {
+		description: "Push incoming events into the agent automatically: off, targeted, or all",
+		type: "string",
+		default: process.env.PIBUS_PUSH ?? process.env.PIBUS_PUSH_MODE ?? DEFAULT_PUSH_MODE,
 	});
-	pi.registerFlag("bus-trigger-addressed", {
-		description: "Targeted PiBus messages trigger an agent turn while idle, or steer while streaming",
-		type: "boolean",
-		default: envBool("PIBUS_TRIGGER_ADDRESSED", true),
+	pi.registerFlag("bus-trigger", {
+		description: "Trigger an agent turn for pushed events: off, targeted, or all",
+		type: "string",
+		default: process.env.PIBUS_TRIGGER ?? process.env.PIBUS_TRIGGER_MODE ?? DEFAULT_TRIGGER_MODE,
 	});
 
 	let client: PiBusClient | undefined;
@@ -165,8 +175,8 @@ export default function pibusExtension(pi: ExtensionAPI) {
 		agentName: PROCESS_AGENT_ID,
 		rooms: [DEFAULT_ROOM],
 		topics: ["*"],
-		injectBroadcast: true,
-		triggerAddressed: true,
+		pushMode: DEFAULT_PUSH_MODE as PushMode,
+		triggerMode: DEFAULT_TRIGGER_MODE as TriggerMode,
 	};
 
 	function readConfig(ctx: ExtensionContext) {
@@ -178,8 +188,8 @@ export default function pibusExtension(pi: ExtensionAPI) {
 			agentName,
 			rooms: splitCsv(flagString(pi, "bus-room", DEFAULT_ROOM), [DEFAULT_ROOM]),
 			topics: splitCsv(flagString(pi, "bus-topics", DEFAULT_TOPICS), ["*"]),
-			injectBroadcast: flagBool(pi, "bus-inject-broadcast", true),
-			triggerAddressed: flagBool(pi, "bus-trigger-addressed", true),
+			pushMode: normalizePushMode(flagString(pi, "bus-push", DEFAULT_PUSH_MODE), DEFAULT_PUSH_MODE),
+			triggerMode: normalizePushMode(flagString(pi, "bus-trigger", DEFAULT_TRIGGER_MODE), DEFAULT_TRIGGER_MODE) as TriggerMode,
 		};
 		return config;
 	}
@@ -201,14 +211,16 @@ export default function pibusExtension(pi: ExtensionAPI) {
 		if (!event || event.from?.agentId === config.agentId) return;
 		remember(event);
 		const addressed = isAddressedTo(event, config.agentId, config.agentName, client?.connectionId);
-		const shouldInject = addressed || config.injectBroadcast;
-		const shouldTrigger = (addressed && config.triggerAddressed) || event.meta?.trigger === true;
-		if (currentCtx?.hasUI && addressed) currentCtx.ui.notify(`PiBus from ${fromLabel(event)}: ${eventText(event).slice(0, 120)}`, "info");
-		if (!shouldInject) return;
+		const pushRequested = event.meta?.push === true || event.meta?.trigger === true;
+		const pushSuppressed = event.meta?.push === false;
+		const shouldPush = !pushSuppressed && (pushRequested || config.pushMode === "all" || (config.pushMode === "targeted" && addressed));
+		const shouldTrigger = shouldPush && (event.meta?.trigger === true || config.triggerMode === "all" || (config.triggerMode === "targeted" && addressed));
+		if (currentCtx?.hasUI) {
+			const kind = shouldPush ? "pushed" : "buffered";
+			if (addressed || shouldPush) currentCtx.ui.notify(`PiBus ${kind} from ${fromLabel(event)}: ${eventText(event).slice(0, 120)}`, "info");
+		}
+		if (!shouldPush) return;
 		try {
-			const options: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" } = {};
-			if (shouldTrigger) options.triggerTurn = true;
-			if (currentCtx && !currentCtx.isIdle()) options.deliverAs = shouldTrigger ? "steer" : "nextTurn";
 			pi.sendMessage(
 				{
 					customType: "pi-bus.event",
@@ -216,7 +228,7 @@ export default function pibusExtension(pi: ExtensionAPI) {
 					display: true,
 					details: event,
 				},
-				options,
+				{ triggerTurn: shouldTrigger },
 			);
 		} catch (error) {
 			currentCtx?.ui.notify(`PiBus failed to inject message: ${(error as Error).message}`, "error");
@@ -286,8 +298,17 @@ export default function pibusExtension(pi: ExtensionAPI) {
 		return connectPromise;
 	}
 
+	function disconnect(clearStatus = false) {
+		client?.close();
+		client = undefined;
+		connectPromise = undefined;
+		peers = [];
+		if (clearStatus) updateStatus(undefined);
+		else updateStatus("offline");
+	}
+
 	function requireClient() {
-		if (!client?.isOnline) throw new Error("PiBus is not connected. Start pi-bus-server or run /bus-reconnect.");
+		if (!client?.isOnline) throw new Error("PiBus is not connected. Start pi-bus-server or call bus_connect first.");
 		return client;
 	}
 
@@ -306,28 +327,42 @@ export default function pibusExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
-		updateStatus(undefined);
-		client?.close();
-		client = undefined;
+		disconnect(true);
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
 		readConfig(ctx);
 		const status = client?.isOnline ? "connected" : "not connected";
 		const busPrompt = [
-			"PiBus multi-agent event bus is available for coordinating with other pi agents.",
-			`PiBus status: ${status}. Your PiBus id/name: ${config.agentId} / ${config.agentName}. Rooms: ${config.rooms.join(", ")}. Subscribed topics: ${config.topics.join(", ")}.`,
-			"Use bus_publish for explicit handoffs, questions, discoveries, blockers, and status updates. Use bus_inbox, bus_wait, and bus_agents to read messages and discover peers.",
+			"PiBus multi-agent event bus is available for push-based coordination with other isolated pi agents.",
+			`PiBus status: ${status}. Your PiBus id/name: ${config.agentId} / ${config.agentName}. Rooms: ${config.rooms.join(", ")}. Subscribed topics: ${config.topics.join(", ")}. Push mode: ${config.pushMode}. Trigger mode: ${config.triggerMode}.`,
+			"When connected, incoming PiBus events are pushed into context automatically and can trigger a turn; bus_inbox is only a local buffer for review.",
+			"Use bus_connect to join, bus_publish for handoffs/questions/discoveries/blockers/status updates, bus_agents to discover peers, and bus_disconnect when this isolated agent should stop receiving.",
 			"Avoid publishing every internal thought. Publish concise, actionable information and include a target when a specific peer should react.",
 		].join("\n");
 		return { systemPrompt: `${event.systemPrompt}\n\n${busPrompt}` };
 	});
 
+	pi.registerCommand("bus-connect", {
+		description: "Connect this isolated pi agent to the PiBus broker and start receiving pushed events",
+		handler: async (_args, ctx) => {
+			await connect(ctx);
+		},
+	});
+
+	pi.registerCommand("bus-disconnect", {
+		description: "Disconnect this isolated pi agent from PiBus and stop receiving pushed events",
+		handler: async (_args, ctx) => {
+			currentCtx = ctx;
+			disconnect(false);
+			ctx.ui.notify("PiBus disconnected; this agent will not receive pushed events until /bus-connect.", "info");
+		},
+	});
+
 	pi.registerCommand("bus-reconnect", {
 		description: "Reconnect this pi session to the PiBus broker",
 		handler: async (_args, ctx) => {
-			client?.close();
-			client = undefined;
+			disconnect(false);
 			await connect(ctx);
 		},
 	});
@@ -348,6 +383,8 @@ export default function pibusExtension(pi: ExtensionAPI) {
 				`Agent: ${config.agentName} (${config.agentId})`,
 				`Rooms: ${config.rooms.join(", ")}`,
 				`Topics: ${config.topics.join(", ")}`,
+				`Push mode: ${config.pushMode}`,
+				`Trigger mode: ${config.triggerMode}`,
 				`Peers: ${peers.length}`,
 				...peers.map((peer) => `  - ${peer.name ?? peer.agentId} (${peer.agentId}) rooms=${peer.rooms?.join(",") ?? ""}`),
 			].join("\n");
@@ -368,7 +405,7 @@ export default function pibusExtension(pi: ExtensionAPI) {
 			const parts = trimmed.split(/\s+/);
 			const topic = parts.length > 1 && parts[0].includes(".") ? parts.shift()! : DEFAULT_TOPIC;
 			const text = parts.join(" ");
-			const ack = await c.publish({ room: config.rooms[0] ?? DEFAULT_ROOM, topic, text });
+			const ack = await c.publish({ room: config.rooms[0] ?? DEFAULT_ROOM, topic, text, meta: { push: true } });
 			ctx.ui.notify(`Published ${ack.eventId} to ${ack.recipients} peer(s)`, "info");
 		},
 	});
@@ -379,6 +416,40 @@ export default function pibusExtension(pi: ExtensionAPI) {
 			const text = formatEventList(inbox.slice(-50));
 			if (ctx.hasUI) await ctx.ui.editor("PiBus inbox", text);
 			else ctx.ui.notify(text, "info");
+		},
+	});
+
+	pi.registerTool({
+		name: "bus_connect",
+		label: "PiBus Connect",
+		description: "Connect this isolated pi agent to the PiBus broker. Once connected, matching incoming events are pushed into context automatically.",
+		promptSnippet: "Connect this isolated pi agent to PiBus so it can send and receive pushed events",
+		promptGuidelines: [
+			"Use bus_connect when PiBus is disconnected and the task requires coordination with other pi agents.",
+		],
+		parameters: Type.Object({}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+			await connect(ctx);
+			const c = requireClient();
+			return {
+				content: [{ type: "text", text: `Connected to PiBus as ${config.agentName} (${config.agentId}); pushed events are enabled in ${config.pushMode} mode and trigger mode is ${config.triggerMode}.` }],
+				details: { agentId: config.agentId, agentName: config.agentName, rooms: config.rooms, topics: config.topics, pushMode: config.pushMode, triggerMode: config.triggerMode, connectionId: c.connectionId },
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "bus_disconnect",
+		label: "PiBus Disconnect",
+		description: "Disconnect this isolated pi agent from PiBus. It can no longer receive pushed events until bus_connect is called again.",
+		promptSnippet: "Disconnect this isolated pi agent from PiBus and stop receiving pushed events",
+		parameters: Type.Object({}),
+		async execute() {
+			disconnect(false);
+			return {
+				content: [{ type: "text", text: "Disconnected from PiBus. This agent will not receive pushed events until bus_connect is called." }],
+				details: { disconnected: true },
+			};
 		},
 	});
 
@@ -397,6 +468,8 @@ export default function pibusExtension(pi: ExtensionAPI) {
 			room: Type.Optional(Type.String({ description: "Room to publish to. Defaults to this agent's first room." })),
 			target: Type.Optional(Type.String({ description: "Optional comma-separated target agent ids/names for a direct message." })),
 			priority: Type.Optional(Type.String({ description: "Optional priority, e.g. low, normal, high." })),
+			push: Type.Optional(Type.Boolean({ description: "Hint recipients to push this event into context immediately. Default: true." })),
+			trigger: Type.Optional(Type.Boolean({ description: "Hint recipients to trigger an agent turn immediately. Default: false unless addressed and recipient trigger mode is targeted." })),
 			includeSelf: Type.Optional(Type.Boolean({ description: "Whether this agent should receive its own event." })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -409,6 +482,7 @@ export default function pibusExtension(pi: ExtensionAPI) {
 					text: params.text,
 					target: params.target,
 					priority: params.priority ?? "normal",
+					meta: { push: params.push ?? true, trigger: params.trigger ?? false },
 				},
 				{ includeSelf: params.includeSelf ?? false },
 			);

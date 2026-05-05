@@ -4,7 +4,7 @@ A Bun workspace for highly customized pi extensions and multi-agent workflows.
 
 ## Packages
 
-- [`packages/pi-bus`](./packages/pi-bus) — bidirectional event bus for coordinating multiple pi agents.
+- [`packages/pi-bus`](./packages/pi-bus) — push-based bidirectional event bus for coordinating isolated pi agents.
 
 ## Workspace commands
 
