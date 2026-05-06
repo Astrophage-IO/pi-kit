@@ -10,72 +10,81 @@
 
 ## Requirements
 
-This package intentionally ships TypeScript source and Bun shebang binaries. Use Bun to run the broker and CLI.
+- **Pi** (`@mariozechner/pi-coding-agent`) — host for the extension. Provides `@mariozechner/pi-tui` and `typebox` at runtime, so the extension only declares them as peer deps with a `"*"` range.
+- **Bun** `>=1.0.0` — required to run the broker and the convenience CLI. The bins ship as TypeScript with Bun shebangs (`#!/usr/bin/env bun`); the extension itself loads under Pi's standard TS loader without Bun.
+- Runtime dependency: `@bufbuild/protobuf` (installed automatically by `pi install` / `npm install`).
 
-Peer packages used by the extension:
+## Install
 
-- `@mariozechner/pi-coding-agent` `^0.73.0`
-- `@mariozechner/pi-tui` `^0.73.0`
-- `typebox` `^1.1.0`
+Install into Pi from a local checkout (works today; the workspace isn't a publishable single-package repo):
 
-The client/server protocol dependency is `@bufbuild/protobuf`.
+```bash
+pi install /absolute/path/to/pi-kit/packages/pi-bus
+# or, for a project-local install written to .pi/settings.json
+pi install -l /absolute/path/to/pi-kit/packages/pi-bus
+```
 
-## Quick start from the workspace root
+Or load it ephemerally for one session without writing to settings:
 
-Start the broker:
+```bash
+pi -e /absolute/path/to/pi-kit/packages/pi-bus
+```
+
+After install, restart pi. The extension auto-connects to a broker on `127.0.0.1:7373` unless `--bus-autostart=false` (or `PIBUS_AUTOSTART=0`).
+
+## Run the broker
+
+From the kit's workspace root, the `Makefile` wraps the bin:
+
+```bash
+make broker                  # foreground, verbose, 127.0.0.1:7373
+make broker PORT=8080        # override port (HOST also supported)
+make broker-bg               # detached; pid /tmp/pi-bus.pid, log /tmp/pi-bus.log
+make broker-status
+make broker-stop
+```
+
+Or invoke the bin directly:
 
 ```bash
 bun run packages/pi-bus/bin/pi-bus-server.ts --port 7373 --verbose
 ```
 
-Start two pi sessions with different agent names:
+## Connect a pi session
+
+After `pi install`, the `bus-*` flags are part of pi's CLI and `--bus-autostart` defaults to `true`, so a connected agent is just one flag:
 
 ```bash
-PIBUS_AGENT=planner PIBUS_NAME=planner PIBUS_PORT=7373 pi -e ./packages/pi-bus/extensions/pi-bus.ts
-PIBUS_AGENT=worker  PIBUS_NAME=worker  PIBUS_PORT=7373 pi -e ./packages/pi-bus/extensions/pi-bus.ts
+pi --bus-name worker                                   # join default room, all topics
+pi --bus-name planner --bus-room planner-worker        # custom room
+pi --bus-name scout --bus-topics agent.handoff,agent.status
+pi --bus-host 192.168.1.5 --bus-port 9000 --bus-name remote
+pi --bus-autostart=false --bus-name lazy               # opt out; use /bus-connect later
 ```
 
-Ask one agent to coordinate:
+Once two agents are up, ask one to coordinate the other:
 
 ```text
 Use bus_agents to find peers, then send worker a short implementation request with bus_publish.
 ```
 
-For isolated/on-demand agents, disable autostart and connect only when needed:
+Every flag has a matching env var (`PIBUS_NAME`, `PIBUS_ROOM`, `PIBUS_PORT`, `PIBUS_AUTOSTART`, …) — see [Extension configuration](#extension-configuration) below.
+
+## Dev mode (without install)
+
+When iterating on the extension itself, load it ephemerally with `pi -e` instead of `pi install`:
 
 ```bash
-PIBUS_AUTOSTART=0 PIBUS_AGENT=scout PIBUS_NAME=scout PIBUS_PORT=7373 pi -e ./packages/pi-bus/extensions/pi-bus.ts
-```
-
-Then ask the agent to use `bus_connect`, dispatch with `bus_publish`, receive pushed events, and call `bus_disconnect` when done.
-
-## From inside this package
-
-```bash
-bun run bin/pi-bus-server.ts --port 7373 --verbose
-PIBUS_AGENT=planner PIBUS_NAME=planner pi -e ./extensions/pi-bus.ts
+PIBUS_AGENT=planner PIBUS_NAME=planner pi -e ./packages/pi-bus/extensions/pi-bus.ts
+PIBUS_AGENT=worker  PIBUS_NAME=worker  pi -e ./packages/pi-bus/extensions/pi-bus.ts
 ```
 
 The convenience CLI can publish or inspect broker state:
 
 ```bash
-bun run bin/pi-bus.ts publish --topic agent.message "hello peers"
-bun run bin/pi-bus.ts peers
-bun run bin/pi-bus.ts history --room default --topic agent.*
-```
-
-## Package usage
-
-Load it directly as a pi package:
-
-```bash
-pi -e /path/to/pi-kit/packages/pi-bus
-```
-
-Or install it into pi settings:
-
-```bash
-pi install /path/to/pi-kit/packages/pi-bus
+bun run packages/pi-bus/bin/pi-bus.ts publish --topic agent.message "hello peers"
+bun run packages/pi-bus/bin/pi-bus.ts peers
+bun run packages/pi-bus/bin/pi-bus.ts history --room default --topic agent.*
 ```
 
 ## Broker configuration
