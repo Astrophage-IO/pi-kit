@@ -41,9 +41,15 @@
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "peerDependencies": {
+    "@astrophage-io/pi-bus": "*",
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
     "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@astrophage-io/pi-bus": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@mariozechner/pi-ai": "^0.73.0",

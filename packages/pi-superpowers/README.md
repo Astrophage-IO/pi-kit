@@ -140,6 +140,20 @@ Override per profile with:
 }
 ```
 
+## Coordinate with pi-bus (optional)
+
+Specialists can publish findings back to the parent or other peers via PiBus by passing `--superpower-bus`:
+
+```bash
+pi --superpower-bus --bus-name planner
+# or, persistently:
+PI_SUPERPOWER_BUS=1 pi
+```
+
+When set, every child spawned by `slack_research`, `jira_research`, etc. loads `@astrophage-io/pi-bus` and connects to the same broker as the parent. Children inherit `PIBUS_ROOM`/`PIBUS_TOPICS` from the parent's env and get a derived `PIBUS_NAME` like `planner/slack`. The child's push mode defaults to `off` so inbound events don't steal the specialist's context — it just gains the ability to call `bus_publish` to surface progress, ask questions, or hand off work.
+
+If the `@astrophage-io/pi-bus` package isn't installed alongside `@astrophage-io/pi-superpowers`, pass an explicit path with `--superpower-bus-extension /path/to/pi-bus/extensions/pi-bus.ts`.
+
 ## Safety
 
 Use read-only MCP tools for research profiles. The example config blocks common mutation tool names (`post`, `send`, `update`, `delete`, `comment`, etc.), but MCP servers vary. Review your MCP server's tool list and tighten `allowTools`/`blockTools` before using this with production workspaces.

@@ -7,6 +7,7 @@ import { _internals, _resetConfigCacheForTesting } from "../extensions/superpowe
 
 const {
 	addUsage,
+	buildChildEnv,
 	expandValue,
 	extractLastAssistantText,
 	extractMessageText,
@@ -180,6 +181,54 @@ test("addUsage accumulates input/output/cache/cost and ignores garbage", () => {
 	addUsage(summary, null);
 	addUsage(summary, { input: "not a number" });
 	assert.deepEqual(summary, { input: 17, output: 8, cacheRead: 2, cacheWrite: 1, cost: 0.0123, turns: 0 });
+});
+
+test("buildChildEnv only mutates PIBUS_* variables when bus extension is enabled", () => {
+	const before = { ...process.env };
+	delete process.env.PIBUS_AUTOSTART;
+	delete process.env.PIBUS_AGENT;
+	delete process.env.PIBUS_NAME;
+	delete process.env.PIBUS_ROOM;
+	delete process.env.PIBUS_TOPICS;
+	delete process.env.PIBUS_PUSH;
+	delete process.env.PIBUS_TRIGGER;
+	try {
+		const passthrough = buildChildEnv("slack", undefined);
+		assert.equal(passthrough.PIBUS_AUTOSTART, undefined);
+		assert.equal(passthrough.PIBUS_NAME, undefined);
+
+		const withBus = buildChildEnv("slack", "/path/to/pi-bus.ts");
+		assert.equal(withBus.PIBUS_AUTOSTART, "1");
+		assert.equal(withBus.PIBUS_PUSH, "off");
+		assert.equal(withBus.PIBUS_TRIGGER, "off");
+		assert.equal(withBus.PIBUS_ROOM, "default");
+		assert.equal(withBus.PIBUS_TOPICS, "*");
+		assert.ok(withBus.PIBUS_AGENT?.includes(":slack:"));
+		assert.ok(withBus.PIBUS_NAME?.endsWith("/slack"));
+	} finally {
+		for (const key of Object.keys(process.env)) if (!(key in before)) delete process.env[key];
+		for (const [key, value] of Object.entries(before)) process.env[key] = value;
+	}
+});
+
+test("buildChildEnv respects parent PIBUS_* overrides", () => {
+	const before = { ...process.env };
+	process.env.PIBUS_ROOM = "ops";
+	process.env.PIBUS_TOPICS = "agent.handoff,agent.status";
+	process.env.PIBUS_PUSH = "targeted";
+	process.env.PIBUS_TRIGGER = "targeted";
+	process.env.PIBUS_NAME = "planner";
+	try {
+		const env = buildChildEnv("jira", "/path/to/pi-bus.ts");
+		assert.equal(env.PIBUS_ROOM, "ops");
+		assert.equal(env.PIBUS_TOPICS, "agent.handoff,agent.status");
+		assert.equal(env.PIBUS_PUSH, "targeted");
+		assert.equal(env.PIBUS_TRIGGER, "targeted");
+		assert.equal(env.PIBUS_NAME, "planner/jira");
+	} finally {
+		for (const key of Object.keys(process.env)) if (!(key in before)) delete process.env[key];
+		for (const [key, value] of Object.entries(before)) process.env[key] = value;
+	}
 });
 
 test("mcpResultToText flattens text, image, and resource content items", () => {

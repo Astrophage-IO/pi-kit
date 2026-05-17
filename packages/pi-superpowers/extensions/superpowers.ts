@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -135,6 +136,16 @@ function registerFlags(pi: ExtensionAPI): void {
 		type: "boolean",
 		default: process.env.PI_SUPERPOWER_VERBOSE === "1",
 	});
+	pi.registerFlag("superpower-bus", {
+		description: "Load the pi-bus extension in specialist child agents so they can publish findings back to the parent over PiBus.",
+		type: "boolean",
+		default: process.env.PI_SUPERPOWER_BUS === "1",
+	});
+	pi.registerFlag("superpower-bus-extension", {
+		description: "Path to the pi-bus extension entry to load in child specialists. Defaults to the @astrophage-io/pi-bus install if resolvable.",
+		type: "string",
+		default: process.env.PI_SUPERPOWER_BUS_EXTENSION ?? "",
+	});
 }
 
 function flagString(pi: ExtensionAPI, name: string, fallback = ""): string {
@@ -169,12 +180,17 @@ export default function superpowersExtension(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event, _ctx) => {
 		if (!flagBool(pi, "superpower-child", false)) return;
 		const profile = flagString(pi, "superpower-profile", "unknown");
-		const extra = [
+		const lines = [
 			`You are running as a dedicated ${profile} specialist child agent spawned by a parent Pi session.`,
 			"Use the available MCP tools to gather evidence and answer the task. Do not call parent-agent tools or spawn other specialists.",
 			childToolNames.length > 0 ? `Active MCP tools: ${childToolNames.join(", ")}` : "No MCP tools are active; report this as a configuration problem.",
-		].join("\n");
-		return { systemPrompt: `${event.systemPrompt}\n\n${extra}` };
+		];
+		if (process.env.PIBUS_AUTOSTART && process.env.PIBUS_AUTOSTART !== "0") {
+			lines.push(
+				"PiBus is available: you can publish concise progress updates or findings back to the parent via bus_publish (topic agent.status or agent.handoff). Inbound events are buffered, not pushed, so they will not steal context unless you call bus_inbox.",
+			);
+		}
+		return { systemPrompt: `${event.systemPrompt}\n\n${lines.join("\n")}` };
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -428,6 +444,7 @@ async function runSpecialistAgent(
 	const prompt = await loadSpecialistPrompt(profileName, profile, configPath);
 	const task = formatSpecialistTask(params);
 	const extensionPath = fileURLToPath(import.meta.url);
+	const busExtension = resolveBusExtension(pi);
 	const args = [
 		"--mode", "json",
 		"-p",
@@ -437,15 +454,20 @@ async function runSpecialistAgent(
 		"--no-skills",
 		"--no-prompt-templates",
 		"-e", extensionPath,
+	];
+	if (busExtension) args.push("-e", busExtension);
+	args.push(
 		"--superpower-child=true",
 		"--superpower-profile", profileName,
 		"--superpower-config", configPath,
 		"--system-prompt", prompt,
-	];
+	);
 	if (profile.model) args.push("--model", profile.model);
 	if (profile.thinking) args.push("--thinking", profile.thinking);
 	if (profile.extraArgs) args.push(...profile.extraArgs);
 	args.push(task);
+
+	const env = buildChildEnv(profileName, busExtension);
 
 	return runPiJsonProcess(args, {
 		cwd: ctx.cwd,
@@ -453,7 +475,44 @@ async function runSpecialistAgent(
 		signal,
 		onUpdate,
 		profileName,
+		env,
 	});
+}
+
+function resolveBusExtension(pi: ExtensionAPI): string | undefined {
+	if (!flagBool(pi, "superpower-bus", false)) return undefined;
+	const explicit = flagString(pi, "superpower-bus-extension", "");
+	if (explicit) {
+		const resolved = resolvePath(explicit);
+		if (existsSync(resolved)) return resolved;
+		throw new Error(`--superpower-bus-extension does not exist: ${resolved}`);
+	}
+	const requireFn = createRequire(import.meta.url);
+	try {
+		const pkgPath = requireFn.resolve("@astrophage-io/pi-bus/package.json");
+		const pkgDir = path.dirname(pkgPath);
+		const candidate = path.join(pkgDir, "extensions", "pi-bus.ts");
+		if (existsSync(candidate)) return candidate;
+	} catch {
+		// fall through to monorepo fallback
+	}
+	const monorepoCandidate = path.resolve(packageRoot(), "..", "pi-bus", "extensions", "pi-bus.ts");
+	if (existsSync(monorepoCandidate)) return monorepoCandidate;
+	throw new Error("Could not locate pi-bus extension. Install @astrophage-io/pi-bus or pass --superpower-bus-extension <path>.");
+}
+
+function buildChildEnv(profileName: string, busExtension: string | undefined): Record<string, string> {
+	const env: Record<string, string> = { ...process.env } as Record<string, string>;
+	if (!busExtension) return env;
+	const parentName = process.env.PIBUS_NAME || `${path.basename(process.cwd()) || "pi"}:${process.pid}`;
+	env.PIBUS_AUTOSTART = process.env.PIBUS_AUTOSTART ?? "1";
+	env.PIBUS_AGENT = `${parentName}:${profileName}:${process.pid}-${Date.now().toString(36)}`;
+	env.PIBUS_NAME = `${parentName}/${profileName}`;
+	env.PIBUS_ROOM = process.env.PIBUS_ROOM ?? "default";
+	env.PIBUS_TOPICS = process.env.PIBUS_TOPICS ?? "*";
+	env.PIBUS_PUSH = process.env.PIBUS_PUSH ?? "off";
+	env.PIBUS_TRIGGER = process.env.PIBUS_TRIGGER ?? "off";
+	return env;
 }
 
 async function runPiJsonProcess(
@@ -464,6 +523,7 @@ async function runPiJsonProcess(
 		signal?: AbortSignal;
 		onUpdate?: ((partial: { content: Array<{ type: "text"; text: string }>; details: unknown }) => void) | undefined;
 		profileName: string;
+		env?: Record<string, string>;
 	},
 ): Promise<ChildRunResult> {
 	const invocation = getPiInvocation(args);
@@ -485,7 +545,7 @@ async function runPiJsonProcess(
 	emitUpdate(`${options.profileName} specialist starting...`);
 
 	const exitCode = await new Promise<number>((resolve, reject) => {
-		const child = spawn(invocation.command, invocation.args, { cwd: options.cwd, stdio: ["ignore", "pipe", "pipe"] });
+		const child = spawn(invocation.command, invocation.args, { cwd: options.cwd, stdio: ["ignore", "pipe", "pipe"], env: options.env });
 		const timeout = setTimeout(() => {
 			timedOut = true;
 			child.kill("SIGTERM");
@@ -798,6 +858,7 @@ export async function removeExampleConfig(target = resolvePath(DEFAULT_CONFIG_PA
 
 export const _internals = {
 	addUsage,
+	buildChildEnv,
 	expandValue,
 	extractLastAssistantText,
 	extractMessageText,
