@@ -1,0 +1,98 @@
+{
+  "name": "@astrophage-io/pi-profile",
+  "version": "0.1.0",
+  "description": "Portable pi setup via a single gist: declarative profile of extensions, settings, files, and env-var requirements that any machine can sync.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "bin": {
+    "pi-profile": "./bin/pi-profile.ts"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./manifest": {
+      "types": "./src/manifest.ts",
+      "bun": "./src/manifest.ts",
+      "default": "./src/manifest.ts"
+    },
+    "./source": {
+      "types": "./src/source.ts",
+      "bun": "./src/source.ts",
+      "default": "./src/source.ts"
+    },
+    "./state": {
+      "types": "./src/state.ts",
+      "bun": "./src/state.ts",
+      "default": "./src/state.ts"
+    },
+    "./apply": {
+      "types": "./src/apply.ts",
+      "bun": "./src/apply.ts",
+      "default": "./src/apply.ts"
+    },
+    "./diff": {
+      "types": "./src/diff.ts",
+      "bun": "./src/diff.ts",
+      "default": "./src/diff.ts"
+    },
+    "./extension": {
+      "types": "./extensions/pi-profile.ts",
+      "bun": "./extensions/pi-profile.ts",
+      "default": "./extensions/pi-profile.ts"
+    }
+  },
+  "files": [
+    "bin",
+    "extensions",
+    "src",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "agent",
+    "profile",
+    "sync",
+    "gist",
+    "dotfiles"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "scripts": {
+    "test": "bun test test/*.test.ts",
+    "start": "bun run bin/pi-profile.ts"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.73.0",
+    "@mariozechner/pi-coding-agent": "^0.73.0",
+    "@mariozechner/pi-tui": "^0.73.0",
+    "typebox": "^1.1.37"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/Astrophage-IO/pi-kit.git",
+    "directory": "packages/pi-profile"
+  },
+  "homepage": "https://github.com/Astrophage-IO/pi-kit/tree/main/packages/pi-profile#readme",
+  "bugs": {
+    "url": "https://github.com/Astrophage-IO/pi-kit/issues"
+  }
+}

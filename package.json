@@ -15,7 +15,8 @@
     "proto:lint": "buf lint",
     "proto:generate": "buf generate",
     "pi-bus:start": "bun run packages/pi-bus/bin/pi-bus-server.ts",
-    "pi-bus": "bun run packages/pi-bus/bin/pi-bus.ts"
+    "pi-bus": "bun run packages/pi-bus/bin/pi-bus.ts",
+    "pi-profile": "bun run packages/pi-profile/bin/pi-profile.ts"
   },
   "repository": {
     "type": "git",
