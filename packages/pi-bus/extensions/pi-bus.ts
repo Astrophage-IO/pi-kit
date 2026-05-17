@@ -20,7 +20,7 @@ import {
 
 const MAX_INBOX = 200;
 const DEFAULT_TOPICS = "*";
-const DEFAULT_PUSH_MODE = "all";
+const DEFAULT_PUSH_MODE = "targeted";
 const DEFAULT_TRIGGER_MODE = "targeted";
 const PROCESS_AGENT_ID = `${os.hostname()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -72,13 +72,15 @@ function formatEventForLlm(event: BusEvent): string {
 	].join("\n");
 }
 
-function formatEventList(events: BusEvent[]): string {
+function formatEventList(events: BusEvent[], unread?: Set<string>): string {
 	if (events.length === 0) return "No PiBus messages.";
 	return events
 		.map((event) => {
 			const when = event.createdAt ?? "unknown time";
 			const target = event.target && event.target.length > 0 ? ` -> ${event.target.join(",")}` : "";
-			return `- [${when}] ${event.room}/${event.topic} ${fromLabel(event)}${target}: ${eventText(event)}`;
+			const marker = unread?.has(event.id) ? "*" : " ";
+			const cause = event.causeId ? ` (reply to ${event.causeId})` : "";
+			return `-${marker} [${when}] ${event.room}/${event.topic} ${fromLabel(event)}${target}${cause}: ${eventText(event)}`;
 		})
 		.join("\n");
 }
@@ -86,6 +88,55 @@ function formatEventList(events: BusEvent[]): string {
 function isAddressedTo(event: BusEvent, agentId: string, agentName: string, connectionId?: string): boolean {
 	const target = event.target ?? [];
 	return target.includes(agentId) || target.includes(agentName) || Boolean(connectionId && target.includes(connectionId));
+}
+
+export interface ParsedBusSendArgs {
+	topic?: string;
+	room?: string;
+	target?: string;
+	replyTo?: string;
+	text: string;
+}
+
+export function parseBusSendArgs(args: string): ParsedBusSendArgs {
+	const tokens = args.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
+	const result: ParsedBusSendArgs = { text: "" };
+	const remaining: string[] = [];
+	for (let i = 0; i < tokens.length; i++) {
+		const token = tokens[i]!;
+		const isOpt = token.startsWith("--");
+		const next = tokens[i + 1];
+		const takeNext = (): string | undefined => {
+			if (next === undefined || next.startsWith("--")) return undefined;
+			i++;
+			return stripQuotes(next);
+		};
+		if (isOpt && (token === "--topic" || token === "--room" || token === "--target" || token === "--reply-to" || token === "--replyTo")) {
+			const value = takeNext();
+			if (value === undefined) continue;
+			if (token === "--topic") result.topic = value;
+			else if (token === "--room") result.room = value;
+			else if (token === "--target") result.target = value;
+			else result.replyTo = value;
+		} else if (isOpt && (token.startsWith("--topic=") || token.startsWith("--room=") || token.startsWith("--target=") || token.startsWith("--reply-to=") || token.startsWith("--replyTo="))) {
+			const equalIndex = token.indexOf("=");
+			const key = token.slice(0, equalIndex);
+			const value = stripQuotes(token.slice(equalIndex + 1));
+			if (key === "--topic") result.topic = value;
+			else if (key === "--room") result.room = value;
+			else if (key === "--target") result.target = value;
+			else result.replyTo = value;
+		} else {
+			remaining.push(stripQuotes(token));
+		}
+	}
+	result.text = remaining.join(" ").trim();
+	return result;
+}
+
+function stripQuotes(value: string): string {
+	if (value.length >= 2 && value.startsWith("\"") && value.endsWith("\"")) return value.slice(1, -1);
+	return value;
 }
 
 function eventMatches(
@@ -394,29 +445,55 @@ export default function piBusExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("bus-send", {
-		description: "Publish a PiBus message. Usage: /bus-send [topic] message",
+		description: "Publish a PiBus message. Usage: /bus-send [--topic t] [--target peer] [--reply-to id] message",
 		handler: async (args, ctx) => {
 			await connect(ctx);
 			const c = requireClient();
 			const trimmed = args.trim();
 			if (!trimmed) {
-				ctx.ui.notify("Usage: /bus-send [topic] message", "warning");
+				ctx.ui.notify("Usage: /bus-send [--topic t] [--target peer] [--reply-to id] message", "warning");
 				return;
 			}
-			const parts = trimmed.split(/\s+/);
-			const firstPart = parts[0];
-			const topic = parts.length > 1 && firstPart?.includes(".") ? parts.shift()! : DEFAULT_TOPIC;
-			const text = parts.join(" ");
-			const ack = await c.publish({ room: config.rooms[0] ?? DEFAULT_ROOM, topic, text, hints: { push: true } });
+			const parsed = parseBusSendArgs(trimmed);
+			if (!parsed.text) {
+				ctx.ui.notify("Usage: /bus-send [--topic t] [--target peer] [--reply-to id] message", "warning");
+				return;
+			}
+			const ack = await c.publish({
+				room: parsed.room ?? config.rooms[0] ?? DEFAULT_ROOM,
+				topic: parsed.topic ?? DEFAULT_TOPIC,
+				text: parsed.text,
+				target: parsed.target,
+				causeId: parsed.replyTo,
+				hints: { push: true },
+			});
 			ctx.ui.notify(`Published ${ack.eventId} to ${ack.recipients} peer(s)`, "info");
 		},
 	});
 
 	pi.registerCommand("bus-inbox", {
-		description: "Show recent PiBus messages",
+		description: "Show recent PiBus messages (unread are marked with *)",
 		handler: async (_args, ctx) => {
-			const text = formatEventList(inbox.slice(-50));
+			const recent = inbox.slice(-50);
+			const header = `PiBus inbox: ${recent.length} shown, ${unread.size} unread`;
+			const body = formatEventList(recent, unread);
+			const text = `${header}\n${body}`;
 			if (ctx.hasUI) await ctx.ui.editor("PiBus inbox", text);
+			else ctx.ui.notify(text, "info");
+		},
+	});
+
+	pi.registerCommand("bus-history", {
+		description: "Fetch recent PiBus events from the broker. Usage: /bus-history [room] [topic]",
+		handler: async (args, ctx) => {
+			await connect(ctx);
+			const c = requireClient();
+			const parts = args.trim().split(/\s+/).filter(Boolean);
+			const room = parts[0];
+			const topic = parts[1];
+			const response = await c.requestHistory({ room, topic, limit: 50 });
+			const text = `PiBus history${room ? ` (room=${room})` : ""}${topic ? ` (topic=${topic})` : ""}: ${response.events.length} event(s)\n${formatEventList(response.events)}`;
+			if (ctx.hasUI) await ctx.ui.editor("PiBus history", text);
 			else ctx.ui.notify(text, "info");
 		},
 	});
@@ -473,6 +550,7 @@ export default function piBusExtension(pi: ExtensionAPI) {
 			push: Type.Optional(Type.Boolean({ description: "Hint recipients to push this event into context immediately. Default: true." })),
 			trigger: Type.Optional(Type.Boolean({ description: "Hint recipients to trigger an agent turn immediately. Default: false unless addressed and recipient trigger mode is targeted." })),
 			includeSelf: Type.Optional(Type.Boolean({ description: "Whether this agent should receive its own event." })),
+			replyTo: Type.Optional(Type.String({ description: "PiBus event id this message is replying to. Sets causeId so recipients can thread the conversation." })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			await connect(ctx);
@@ -485,12 +563,41 @@ export default function piBusExtension(pi: ExtensionAPI) {
 					target: params.target,
 					priority: params.priority ?? "normal",
 					hints: { push: params.push ?? true, trigger: params.trigger ?? false },
+					causeId: params.replyTo,
 				},
 				{ includeSelf: params.includeSelf ?? false },
 			);
 			return {
 				content: [{ type: "text", text: `Published PiBus event ${ack.eventId} to ${ack.recipients} peer(s).` }],
 				details: ack,
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "bus_history",
+		label: "PiBus History",
+		description: "Fetch recent PiBus events from the broker's retained history. Useful after reconnecting to catch up on events received while this agent was offline.",
+		promptSnippet: "Fetch recent PiBus events from the broker history",
+		promptGuidelines: [
+			"Use bus_history to catch up after reconnecting or to inspect events that arrived before this agent joined the room.",
+			"Prefer bus_inbox for events already received by this agent; use bus_history when you suspect there were earlier events you missed.",
+		],
+		parameters: Type.Object({
+			limit: Type.Optional(Type.Number({ description: "Maximum number of events to return. Default: 25." })),
+			topic: Type.Optional(Type.String({ description: "Topic filter; supports wildcards like agent.* (broker-side)." })),
+			room: Type.Optional(Type.String({ description: "Room to fetch history from. Defaults to this agent's first room." })),
+			since: Type.Optional(Type.String({ description: "ISO timestamp; only return events created after this moment." })),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			await connect(ctx);
+			const c = requireClient();
+			const limit = Math.max(1, Math.min(params.limit ?? 25, 100));
+			const room = params.room ?? config.rooms[0] ?? DEFAULT_ROOM;
+			const response = await c.requestHistory({ room, topic: params.topic, since: params.since, limit });
+			return {
+				content: [{ type: "text", text: formatEventList(response.events) }],
+				details: { events: response.events, room, topic: params.topic, since: params.since, limit },
 			};
 		},
 	});
@@ -512,9 +619,11 @@ export default function piBusExtension(pi: ExtensionAPI) {
 			let events = inbox.filter((event) => eventMatches(event, { room: params.room, topic: params.topic }, config.agentId, config.agentName, client?.connectionId));
 			if (params.unreadOnly) events = events.filter((event) => unread.has(event.id));
 			events = events.slice(-limit);
+			const unreadSnapshot = new Set(unread);
 			if (params.markRead ?? true) for (const event of events) unread.delete(event.id);
+			const header = `PiBus inbox: ${events.length} shown, ${unread.size} unread`;
 			return {
-				content: [{ type: "text", text: formatEventList(events) }],
+				content: [{ type: "text", text: `${header}\n${formatEventList(events, unreadSnapshot)}` }],
 				details: { events, unreadCount: unread.size },
 			};
 		},
@@ -593,9 +702,15 @@ export default function piBusExtension(pi: ExtensionAPI) {
 				else signal?.addEventListener("abort", finish, { once: true });
 			});
 			const events = collected.slice(0, count);
+			const matched = events.length;
+			const text = matched === 0
+				? `No matching PiBus messages before timeout (${timeoutMs}ms).`
+				: matched < count
+					? `Got ${matched}/${count} matching PiBus messages before timeout (${timeoutMs}ms):\n${formatEventList(events)}`
+					: formatEventList(events);
 			return {
-				content: [{ type: "text", text: events.length > 0 ? formatEventList(events) : `No matching PiBus messages before timeout (${timeoutMs}ms).` }],
-				details: { events, timedOut: events.length < count },
+				content: [{ type: "text", text }],
+				details: { events, matched, requested: count, timedOut: matched < count, satisfied: matched >= count },
 			};
 		},
 	});

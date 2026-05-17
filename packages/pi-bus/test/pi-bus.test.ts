@@ -5,6 +5,7 @@ import { PiBusClient } from "../src/client.ts";
 import { PiBusServer, type PiBusServerOptions } from "../src/server.ts";
 import { PROTOCOL_VERSION, type BusEvent } from "../src/protocol.ts";
 import { decodeFrames, encodeFrame } from "../src/wire.ts";
+import { parseBusSendArgs } from "../extensions/pi-bus.ts";
 
 async function startServer(options: PiBusServerOptions = {}): Promise<{ server: PiBusServer; port: number }> {
 	const server = new PiBusServer({ host: "127.0.0.1", port: 0, heartbeatMs: 60_000, ...options });
@@ -187,6 +188,56 @@ test("server closes unauthenticated sockets after hello timeout", async () => {
 		socket.destroy();
 		await server.close();
 	}
+});
+
+test("history requests return stored events filtered by topic wildcard", async () => {
+	const { server, port } = await startServer();
+	const a = new PiBusClient({ port, agent: { id: "a" }, rooms: ["room"], topics: ["*"], reconnect: false });
+	try {
+		await a.connect();
+		await a.publish({ room: "room", topic: "agent.message", text: "m1" });
+		await a.publish({ room: "room", topic: "agent.status", text: "s1" });
+		await a.publish({ room: "room", topic: "other.topic", text: "o1" });
+		const history = await a.requestHistory({ room: "room", topic: "agent.*", limit: 50 });
+		assert.deepEqual(history.events.map((event) => event.text), ["m1", "s1"]);
+	} finally {
+		a.close();
+		await server.close();
+	}
+});
+
+test("publish forwards causeId so recipients can thread replies", async () => {
+	const { server, port } = await startServer();
+	const a = new PiBusClient({ port, agent: { id: "a" }, rooms: ["room"], topics: ["*"], reconnect: false });
+	const b = new PiBusClient({ port, agent: { id: "b" }, rooms: ["room"], topics: ["*"], reconnect: false });
+	try {
+		await Promise.all([a.connect(), b.connect()]);
+		const eventPromise = onceBusEvent(b);
+		await a.publish({ room: "room", topic: "agent.reply", text: "thanks", causeId: "evt_original" });
+		const event = await eventPromise;
+		assert.equal(event.causeId, "evt_original");
+	} finally {
+		a.close();
+		b.close();
+		await server.close();
+	}
+});
+
+test("parseBusSendArgs handles flags, quoted values, and free text", () => {
+	assert.deepEqual(parseBusSendArgs("hello world"), { text: "hello world" });
+	assert.deepEqual(
+		parseBusSendArgs("--topic agent.handoff --target worker please take this"),
+		{ topic: "agent.handoff", target: "worker", text: "please take this" },
+	);
+	assert.deepEqual(
+		parseBusSendArgs('--reply-to evt_123 --topic agent.reply "all good thanks"'),
+		{ replyTo: "evt_123", topic: "agent.reply", text: "all good thanks" },
+	);
+	assert.deepEqual(
+		parseBusSendArgs("--topic=agent.status --room=ops we are green"),
+		{ topic: "agent.status", room: "ops", text: "we are green" },
+	);
+	assert.deepEqual(parseBusSendArgs(""), { text: "" });
 });
 
 test("protobuf wire decodes multiple length-prefixed frames", () => {

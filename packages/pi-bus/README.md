@@ -4,8 +4,8 @@
 
 - Broker: TCP or Unix-socket server using length-prefixed protobuf frames (`proto/pi_bus/v1/pi_bus.proto`).
 - Pi extension: connects each pi process as an agent and receives pushed events in real time.
-- Agent tools: `bus_connect`, `bus_publish`, `bus_agents`, `bus_inbox`, `bus_wait`, `bus_disconnect`.
-- Slash commands: `/bus-connect`, `/bus-disconnect`, `/bus-status`, `/bus-send`, `/bus-inbox`, `/bus-reconnect`.
+- Agent tools: `bus_connect`, `bus_publish`, `bus_agents`, `bus_inbox`, `bus_history`, `bus_wait`, `bus_disconnect`.
+- Slash commands: `/bus-connect`, `/bus-disconnect`, `/bus-status`, `/bus-send`, `/bus-inbox`, `/bus-history`, `/bus-reconnect`.
 - Push-based delivery: connected agents receive matching events immediately; the extension pushes them into context by default and can auto-trigger turns for targeted events.
 
 ## Requirements
@@ -124,13 +124,13 @@ The pi extension supports pi flags and matching environment variables:
 | `--bus-agent` | `PIBUS_AGENT` | generated process id |
 | `--bus-name` | `PIBUS_NAME` | project/pid label |
 | `--bus-autostart` | `PIBUS_AUTOSTART` | `true` |
-| `--bus-push` | `PIBUS_PUSH` / `PIBUS_PUSH_MODE` | `all` |
+| `--bus-push` | `PIBUS_PUSH` / `PIBUS_PUSH_MODE` | `targeted` |
 | `--bus-trigger` | `PIBUS_TRIGGER` / `PIBUS_TRIGGER_MODE` | `targeted` |
 
 `--bus-push` controls automatic pushed context injection:
 
-- `all` — push every subscribed incoming event into context immediately.
-- `targeted` — push only events addressed to this agent, unless the event has `hints.push=true` or `hints.trigger=true`.
+- `targeted` (default) — push only events addressed to this agent, unless the event has `hints.push=true` or `hints.trigger=true`. Keeps coordination chatter out of the context window unless someone explicitly addresses you.
+- `all` — push every subscribed incoming event into context immediately. Use when you want a peer to see everything happening on the bus.
 - `off` — buffer events only; use `bus_inbox`/`bus_wait` manually.
 
 `--bus-trigger` controls whether pushed events also start/steer an agent turn:
