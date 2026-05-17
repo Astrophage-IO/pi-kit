@@ -1,6 +1,6 @@
 {
   "name": "@astrophage-io/pi-bus",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A protobuf-framed bidirectional event bus for coordinating isolated pi coding agents.",
   "type": "module",
   "main": "./src/index.ts",
