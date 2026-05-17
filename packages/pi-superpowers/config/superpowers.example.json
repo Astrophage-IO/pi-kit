@@ -1,0 +1,39 @@
+{
+  "profiles": {
+    "slack": {
+      "description": "Read-only Slack research profile",
+      "servers": ["slack"],
+      "allowTools": ["*"],
+      "blockTools": ["*post*", "*send*", "*update*", "*delete*", "*react*"],
+      "model": "claude-haiku-4-5"
+    },
+    "jira": {
+      "description": "Read-only Jira research profile via Atlassian MCP",
+      "servers": ["atlassian"],
+      "allowTools": ["*jira*", "*issue*", "*search*"],
+      "blockTools": ["*create*", "*update*", "*delete*", "*transition*", "*comment*", "*assign*"],
+      "model": "claude-haiku-4-5"
+    },
+    "confluence": {
+      "description": "Read-only Confluence research profile via Atlassian MCP",
+      "servers": ["atlassian"],
+      "allowTools": ["*confluence*", "*page*", "*search*"],
+      "blockTools": ["*create*", "*update*", "*delete*", "*comment*"],
+      "model": "claude-haiku-4-5"
+    }
+  },
+  "servers": {
+    "slack": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-slack"],
+      "env": {
+        "SLACK_BOT_TOKEN": "$SLACK_BOT_TOKEN",
+        "SLACK_TEAM_ID": "$SLACK_TEAM_ID"
+      }
+    },
+    "atlassian": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse"]
+    }
+  }
+}

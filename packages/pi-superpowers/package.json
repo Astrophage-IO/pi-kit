@@ -1,0 +1,60 @@
+{
+  "name": "@astrophage-io/pi-superpowers",
+  "version": "0.1.0",
+  "description": "Specialist Pi agents spawned from a primary Pi session, backed by MCP profiles.",
+  "type": "module",
+  "main": "./extensions/superpowers.ts",
+  "types": "./extensions/superpowers.ts",
+  "exports": {
+    ".": {
+      "types": "./extensions/superpowers.ts",
+      "default": "./extensions/superpowers.ts"
+    },
+    "./extension": {
+      "types": "./extensions/superpowers.ts",
+      "default": "./extensions/superpowers.ts"
+    }
+  },
+  "files": [
+    "agents",
+    "config",
+    "extensions",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "agent",
+    "mcp",
+    "slack",
+    "jira",
+    "confluence"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.73.0",
+    "@mariozechner/pi-coding-agent": "^0.73.0",
+    "@mariozechner/pi-tui": "^0.73.0",
+    "typebox": "^1.1.37"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/Astrophage-IO/pi-kit.git",
+    "directory": "packages/pi-superpowers"
+  }
+}

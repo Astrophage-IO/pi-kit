@@ -7,6 +7,7 @@ The first package, `@astrophage-io/pi-bus`, is a protobuf-framed push event bus 
 ## Packages
 
 - [`packages/pi-bus`](./packages/pi-bus) — push-based bidirectional event bus for coordinating isolated pi agents.
+- [`packages/pi-superpowers`](./packages/pi-superpowers) — parent-session tools that spawn MCP-backed specialist Pi agents for Slack, Jira, and Confluence research.
 
 ## Workspace commands
 
@@ -17,6 +18,7 @@ bun run typecheck
 bun test
 bun run test:pi
 bun run pi-bus:start -- --port 7373 --verbose
+pi install /absolute/path/to/pi-kit/packages/pi-superpowers
 ```
 
 ## Repository conventions
