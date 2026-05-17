@@ -1,6 +1,6 @@
 {
   "name": "@astrophage-io/pi-profile",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Portable pi setup via a single gist: declarative profile of extensions, settings, files, and env-var requirements that any machine can sync.",
   "type": "module",
   "main": "./src/index.ts",

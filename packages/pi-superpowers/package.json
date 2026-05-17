@@ -1,6 +1,6 @@
 {
   "name": "@astrophage-io/pi-superpowers",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Specialist Pi agents spawned from a primary Pi session, backed by MCP profiles.",
   "type": "module",
   "main": "./extensions/superpowers.ts",
