@@ -25,8 +25,12 @@ pi install /absolute/path/to/pi-kit/packages/pi-superpowers
 
 - Source code is TypeScript-first. Do not add handwritten `.js`/`.mjs` source files.
 - Each extension module should be independently installable as a pi package.
-- Commit messages for AI-assisted changes must include the Codex attribution trailer:
+- Commit messages for AI-assisted changes must include a `Co-authored-by:` trailer naming the agent that did the work. Do not default to Codex for non-Codex agents:
 
 ```text
 Co-authored-by: Codex <codex@openai.com>
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Claude <noreply@anthropic.com>
 ```
+
+  Include one trailer per collaborating agent. See [`AGENTS.md`](./AGENTS.md) for details.

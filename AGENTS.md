@@ -3,11 +3,15 @@
 - This repository is a Bun workspace. Keep package source in `packages/*`.
 - Use TypeScript for all handwritten source, tests, bins, and pi extensions. Do not add handwritten `.js` or `.mjs` files.
 - Keep each package independently installable as a pi package when possible.
-- For commits containing AI-assisted work, include this exact trailer in the commit message:
+- For commits containing AI-assisted work, attribute the agent that actually did the work via a `Co-authored-by:` trailer. Do not default to Codex regardless of agent — that misattributes work and sends the wrong signal in `git log`. Use the canonical identity for the agent you are:
 
 ```text
 Co-authored-by: Codex <codex@openai.com>
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Claude <noreply@anthropic.com>
 ```
+
+  If several agents collaborated on a single commit, include one `Co-authored-by:` trailer per agent. If you don't have a canonical identity for your agent, ask the user before inventing one.
 
 - Git author for this repo should be `manashmandal <manashmndl@gmail.com>`.
 
