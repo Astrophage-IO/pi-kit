@@ -34,3 +34,17 @@ Anything that changes `proto/**` must be followed by `bun run proto:generate` an
 
 - Unit tests live in `packages/*/test/*.test.ts` and run under `bun test`.
 - The push-coordination smoke at `packages/pi-bus/test/pi-rpc-smoke.ts` requires `pi` on PATH and is not part of CI; run it locally with `bun run test:pi` when changing the pi-bus extension or protocol.
+
+## Releasing
+
+This workspace uses [changesets](https://github.com/changesets/changesets) for versioning and publishes to GitHub Packages (`@astrophage-io/*`) via [`.github/workflows/release.yml`](.github/workflows/release.yml). The release workflow uses the built-in `GITHUB_TOKEN` — no `NPM_TOKEN` secret is required.
+
+For any PR that introduces a user-visible change to one or more packages, record a changeset:
+
+```bash
+bunx changeset
+```
+
+Pick the affected packages and the bump (`patch` / `minor` / `major`), then commit the generated `.changeset/<id>.md` alongside your changes. On merge to `main`, the release workflow either opens/updates a "Version Packages" PR (when there are pending changesets) or, once that PR is merged, runs `changeset publish` to push the bumped packages to GitHub Packages, tag them, and create GitHub Releases.
+
+Do not bump `version` in any `package.json` by hand; let `changeset version` do it.

@@ -86,6 +86,9 @@
     "bun": ">=1.0.0"
   },
   "license": "MIT",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "repository": {
     "type": "git",
     "url": "git+ssh://git@github.com/Astrophage-IO/pi-kit.git",

@@ -16,7 +16,13 @@
 
 ## Install
 
-Install into Pi from a local checkout (works today; the workspace isn't a publishable single-package repo):
+From GitHub Packages (configure your `~/.npmrc` once — see the [root README](../../README.md#install-from-github-packages)):
+
+```bash
+pi install @astrophage-io/pi-bus
+```
+
+Or from a local checkout:
 
 ```bash
 pi install /absolute/path/to/pi-kit/packages/pi-bus

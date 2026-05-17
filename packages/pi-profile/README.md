@@ -15,7 +15,13 @@ You run pi on a laptop, a desktop, and a remote box. You want all three to have 
 
 ## Install
 
-From this workspace:
+From GitHub Packages (configure your `~/.npmrc` once — see the [root README](../../README.md#install-from-github-packages)):
+
+```bash
+pi install @astrophage-io/pi-profile
+```
+
+Or from this workspace:
 
 ```bash
 pi install /Users/manash/projects/pi-kit/packages/pi-profile
@@ -29,16 +35,14 @@ pi install -l /Users/manash/projects/pi-kit/packages/pi-profile
 
 ## Bootstrap on a fresh machine
 
-```bash
-bunx -p @astrophage-io/pi-profile pi-profile init https://gist.github.com/<user>/<id>
-```
-
-Once bun + pi are present:
+The package lives on GitHub Packages, so once your `~/.npmrc` has the scope mapping (see the [root README](../../README.md#install-from-github-packages)):
 
 ```bash
 pi install @astrophage-io/pi-profile
-pi-profile init <gist-url>
+pi-profile init https://gist.github.com/<user>/<id>
 ```
+
+After `init`, only `pi-profile sync` is needed on subsequent runs.
 
 `init` saves the source URL in `~/.pi/profile/state.json`. After that you only need:
 

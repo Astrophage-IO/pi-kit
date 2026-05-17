@@ -16,7 +16,13 @@ The parent agent calls `slack_research(...)`; you do **not** manually run a `pi-
 
 ## Install
 
-From this workspace:
+From GitHub Packages (configure your `~/.npmrc` once — see the [root README](../../README.md#install-from-github-packages)):
+
+```bash
+pi install @astrophage-io/pi-superpowers
+```
+
+Or from this workspace:
 
 ```bash
 pi install /Users/manash/projects/pi-kit/packages/pi-superpowers
