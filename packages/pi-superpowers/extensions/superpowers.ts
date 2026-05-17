@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,7 @@ const PACKAGE_NAME = "@astrophage-io/pi-superpowers";
 const PACKAGE_VERSION = "0.1.0";
 const DEFAULT_CONFIG_PATH = "~/.pi/agent/superpowers.json";
 const MAX_TOOL_NAME_LENGTH = 64;
+const BUNDLED_PROMPT_PROFILES = new Set(["slack", "jira", "confluence"]);
 
 interface ServerConfig {
 	command: string;
@@ -82,6 +83,24 @@ type ResearchParamsType = {
 	context?: string;
 	timeoutMs?: number;
 };
+
+const SpecialistResearchParams = Type.Object({
+	profile: Type.String({ description: "Superpower profile name to use (e.g. slack, jira, confluence, or any profile defined in superpowers.json)." }),
+	question: Type.String({ description: "Question for the specialist agent to answer." }),
+	link: Type.Optional(Type.String({ description: "Primary URL/permalink/issue/page to start from." })),
+	context: Type.Optional(Type.String({ description: "Additional context, constraints, date range, channel, issue key, etc." })),
+	timeoutMs: Type.Optional(Type.Number({ description: "Maximum child-agent runtime in milliseconds. Default: 180000." })),
+});
+
+type SpecialistResearchParamsType = ResearchParamsType & { profile: string };
+
+interface CachedConfig {
+	path: string;
+	mtimeMs: number;
+	config: SuperpowersConfig;
+}
+
+let cachedConfig: CachedConfig | undefined;
 
 function packageRoot(): string {
 	return path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -177,34 +196,102 @@ export default function superpowersExtension(pi: ExtensionAPI) {
 }
 
 function registerResearchTools(pi: ExtensionAPI): void {
-	registerResearchTool(pi, {
-		name: "slack_research",
-		label: "Slack Research",
-		profile: "slack",
-		description: "Spawn a dedicated Slack research Pi agent that answers questions from Slack threads, links, and searches using MCP tools.",
-		guidelines: [
-			"Use slack_research when the user asks about Slack links, threads, channel discussions, incident conversations, decisions, or who said what in Slack.",
-			"slack_research returns an evidence-backed answer; do not ask it to merely dump transcripts unless the user explicitly requests that.",
+	const configPath = resolvePath(flagString(pi, "superpower-config", defaultConfigPath()));
+	const config = tryReadConfigSync(configPath);
+	const registered = new Set<string>();
+
+	const builtins: Array<{ profile: string; description: string; guidelines: string[] }> = [
+		{
+			profile: "slack",
+			description: "Spawn a dedicated Slack research Pi agent that answers questions from Slack threads, links, and searches using MCP tools.",
+			guidelines: [
+				"Use slack_research when the user asks about Slack links, threads, channel discussions, incident conversations, decisions, or who said what in Slack.",
+				"slack_research returns an evidence-backed answer; do not ask it to merely dump transcripts unless the user explicitly requests that.",
+			],
+		},
+		{
+			profile: "jira",
+			description: "Spawn a dedicated Jira research Pi agent that answers questions from Jira issues, comments, relationships, and searches using MCP tools.",
+			guidelines: ["Use jira_research when the user asks about Jira issues, tickets, status, blockers, ownership, comments, or related issue context."],
+		},
+		{
+			profile: "confluence",
+			description: "Spawn a dedicated Confluence research Pi agent that answers questions from Confluence pages and searches using MCP tools.",
+			guidelines: ["Use confluence_research when the user asks about Confluence pages, design docs, runbooks, RFCs, or documented decisions."],
+		},
+	];
+	for (const builtin of builtins) {
+		const name = `${builtin.profile}_research`;
+		registerResearchTool(pi, {
+			name,
+			label: `${capitalize(builtin.profile)} Research`,
+			profile: builtin.profile,
+			description: builtin.description,
+			guidelines: builtin.guidelines,
+		});
+		registered.add(name);
+	}
+
+	if (config) {
+		for (const [profileName, profile] of Object.entries(config.profiles)) {
+			const name = `${sanitizeProfileName(profileName)}_research`;
+			if (registered.has(name)) continue;
+			registerResearchTool(pi, {
+				name,
+				label: `${capitalize(profileName)} Research`,
+				profile: profileName,
+				description: profile.description ?? `Spawn a dedicated ${profileName} research Pi agent backed by MCP tools from the ${profileName} superpower profile.`,
+				guidelines: [`Use ${name} when the user asks for evidence that ${profileName} MCP tools can provide.`],
+			});
+			registered.add(name);
+		}
+	}
+
+	pi.registerTool({
+		name: "specialist_research",
+		label: "Specialist Research",
+		description: "Spawn a dedicated specialist Pi agent for any configured superpower profile. Use when you want to pick the profile by name at call time, e.g. for custom profiles not exposed as a dedicated tool.",
+		promptSnippet: "Run a specialist Pi research agent using any configured superpower profile by name",
+		promptGuidelines: [
+			"Use specialist_research when none of the dedicated *_research tools fits, but a profile in superpowers.json does.",
+			"Pass the profile name exactly as it appears in superpowers.json.",
 		],
+		parameters: SpecialistResearchParams,
+		async execute(_toolCallId, params: SpecialistResearchParamsType, signal, onUpdate, ctx) {
+			const result = await runSpecialistAgent(pi, params.profile, params, signal, onUpdate, ctx);
+			return {
+				content: [{ type: "text", text: result.answer || "(specialist returned no answer)" }],
+				details: {
+					profile: params.profile,
+					exitCode: result.exitCode,
+					usage: result.usage,
+					toolEvents: result.toolEvents,
+					stderr: result.stderr,
+				},
+			};
+		},
 	});
-	registerResearchTool(pi, {
-		name: "jira_research",
-		label: "Jira Research",
-		profile: "jira",
-		description: "Spawn a dedicated Jira research Pi agent that answers questions from Jira issues, comments, relationships, and searches using MCP tools.",
-		guidelines: [
-			"Use jira_research when the user asks about Jira issues, tickets, status, blockers, ownership, comments, or related issue context.",
-		],
-	});
-	registerResearchTool(pi, {
-		name: "confluence_research",
-		label: "Confluence Research",
-		profile: "confluence",
-		description: "Spawn a dedicated Confluence research Pi agent that answers questions from Confluence pages and searches using MCP tools.",
-		guidelines: [
-			"Use confluence_research when the user asks about Confluence pages, design docs, runbooks, RFCs, or documented decisions.",
-		],
-	});
+}
+
+function tryReadConfigSync(configPath: string): SuperpowersConfig | undefined {
+	try {
+		const text = readFileSync(configPath, "utf8");
+		const parsed = JSON.parse(text);
+		if (!isRecord(parsed) || !isRecord(parsed.profiles) || !isRecord(parsed.servers)) return undefined;
+		return parsed as unknown as SuperpowersConfig;
+	} catch {
+		return undefined;
+	}
+}
+
+function sanitizeProfileName(value: string): string {
+	const sanitized = value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+	return sanitized || "profile";
+}
+
+function capitalize(value: string): string {
+	if (!value) return value;
+	return value[0]!.toUpperCase() + value.slice(1);
 }
 
 function registerResearchTool(
@@ -244,7 +331,7 @@ async function initializeChildProfile(pi: ExtensionAPI, ctx: ExtensionContext, c
 	const profileName = flagString(pi, "superpower-profile");
 	if (!profileName) throw new Error("Missing --superpower-profile for specialist child agent");
 	const configPath = resolvePath(flagString(pi, "superpower-config", defaultConfigPath()));
-	const config = await loadConfig(configPath);
+	const config = await getConfig(configPath);
 	const profile = config.profiles[profileName];
 	if (!profile) throw new Error(`Unknown superpower profile: ${profileName}. Available profiles: ${Object.keys(config.profiles).join(", ") || "none"}`);
 	const verbose = flagBool(pi, "superpower-verbose", false);
@@ -335,7 +422,7 @@ async function runSpecialistAgent(
 	ctx: ExtensionContext,
 ): Promise<ChildRunResult> {
 	const configPath = resolvePath(flagString(pi, "superpower-config", defaultConfigPath()));
-	const config = await loadConfig(configPath);
+	const config = await getConfig(configPath);
 	const profile = config.profiles[profileName];
 	if (!profile) throw new Error(`Unknown superpower profile: ${profileName}. Configure it in ${configPath}.`);
 	const prompt = await loadSpecialistPrompt(profileName, profile, configPath);
@@ -529,6 +616,26 @@ async function loadConfig(configPath: string): Promise<SuperpowersConfig> {
 	return parsed as unknown as SuperpowersConfig;
 }
 
+async function getConfig(configPath: string): Promise<SuperpowersConfig> {
+	let mtimeMs: number | undefined;
+	try {
+		const stats = await stat(configPath);
+		mtimeMs = stats.mtimeMs;
+	} catch {
+		mtimeMs = undefined;
+	}
+	if (cachedConfig && cachedConfig.path === configPath && mtimeMs !== undefined && cachedConfig.mtimeMs === mtimeMs) {
+		return cachedConfig.config;
+	}
+	const config = await loadConfig(configPath);
+	if (mtimeMs !== undefined) cachedConfig = { path: configPath, mtimeMs, config };
+	return config;
+}
+
+export function _resetConfigCacheForTesting(): void {
+	cachedConfig = undefined;
+}
+
 function normalizeInputSchema(schema: unknown): Record<string, unknown> {
 	if (isRecord(schema)) return schema;
 	return { type: "object", additionalProperties: true };
@@ -578,7 +685,7 @@ function matchesToolPattern(pattern: string, serverName: string, toolName: strin
 }
 
 function escapeRegex(value: string): string {
-	return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+	return value.replace(/[|\\{}()[\]^$+?.*]/g, "\\$&");
 }
 
 function mcpResultToText(result: unknown): string {
@@ -678,7 +785,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Small helper used by manual smoke checks. Keeping it here avoids an extra bin file for now.
 export async function writeExampleConfig(target = resolvePath(DEFAULT_CONFIG_PATH)): Promise<string> {
 	const source = path.join(packageRoot(), "config", "superpowers.example.json");
 	await mkdir(path.dirname(target), { recursive: true });
@@ -689,3 +795,19 @@ export async function writeExampleConfig(target = resolvePath(DEFAULT_CONFIG_PAT
 export async function removeExampleConfig(target = resolvePath(DEFAULT_CONFIG_PATH)): Promise<void> {
 	await rm(target, { force: true });
 }
+
+export const _internals = {
+	addUsage,
+	expandValue,
+	extractLastAssistantText,
+	extractMessageText,
+	isToolAllowed,
+	loadConfig,
+	makePiToolName,
+	matchesToolPattern,
+	mcpResultToText,
+	resolvePath,
+	sanitizeProfileName,
+	sanitizeToolName,
+	tryReadConfigSync,
+};

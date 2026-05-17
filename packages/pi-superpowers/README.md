@@ -101,11 +101,11 @@ Or:
 Use Jira research to explain the blocker on PROJ-1234 and cite comments.
 ```
 
-The primary agent should call one of:
+The primary agent calls one of:
 
-- `slack_research`
-- `jira_research`
-- `confluence_research`
+- `slack_research`, `jira_research`, `confluence_research` — always registered; route to the matching profile in `superpowers.json`.
+- `<profile>_research` — auto-registered for every additional profile defined in `superpowers.json`. For example, adding a `github` profile registers `github_research`.
+- `specialist_research({ profile, question, ... })` — generic fallback that takes the profile name as a parameter; useful for custom or rarely used profiles.
 
 Each tool starts a child command roughly like:
 
