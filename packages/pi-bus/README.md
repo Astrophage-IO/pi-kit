@@ -85,6 +85,7 @@ The convenience CLI can publish or inspect broker state:
 bun run packages/pi-bus/bin/pi-bus.ts publish --topic agent.message "hello peers"
 bun run packages/pi-bus/bin/pi-bus.ts peers
 bun run packages/pi-bus/bin/pi-bus.ts history --room default --topic agent.*
+bun run packages/pi-bus/bin/pi-bus.ts tail --room default --topic agent.*
 ```
 
 ## Broker configuration

@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { PiBusClient } from "../src/client.ts";
-import { DEFAULT_HOST, DEFAULT_PORT, DEFAULT_ROOM, DEFAULT_TOPIC } from "../src/protocol.ts";
+import { DEFAULT_HOST, DEFAULT_PORT, DEFAULT_ROOM, DEFAULT_TOPIC, type BusEvent } from "../src/protocol.ts";
 
 interface CommonOptions {
 	host: string;
@@ -16,7 +16,7 @@ interface CommonOptions {
 }
 
 function usage(): void {
-	console.log(`Usage: pi-bus <command> [options]\n\nCommands:\n  server              Start a broker (same as pi-bus-server)\n  publish <text>      Publish a message from the CLI\n  peers               List connected peers\n  history             Print recent events\n\nCommon options:\n  --host <host>       Broker host (default: ${DEFAULT_HOST})\n  --port <port>       Broker port (default: ${DEFAULT_PORT})\n  --socket <path>     Broker Unix socket path\n  --token <token>     Shared token\n  --room <room>       Room (default: ${DEFAULT_ROOM})\n  --topic <topic>     Topic (default: ${DEFAULT_TOPIC})\n  --agent <id>        Agent/client id for this CLI process\n  --timeout <ms>      Command timeout in milliseconds (default: 15000)\n  --version           Print version\n  -h, --help          Show help\n\nUse -- before publish text that starts with a dash.\n`);
+	console.log(`Usage: pi-bus <command> [options]\n\nCommands:\n  server              Start a broker (same as pi-bus-server)\n  publish <text>      Publish a message from the CLI\n  peers               List connected peers\n  history             Print recent events\n  tail                Stream events live until interrupted\n\nCommon options:\n  --host <host>       Broker host (default: ${DEFAULT_HOST})\n  --port <port>       Broker port (default: ${DEFAULT_PORT})\n  --socket <path>     Broker Unix socket path\n  --token <token>     Shared token\n  --room <room>       Room (default: ${DEFAULT_ROOM})\n  --topic <topic>     Topic (default: ${DEFAULT_TOPIC})\n  --agent <id>        Agent/client id for this CLI process\n  --timeout <ms>      Command timeout in milliseconds (default: 15000)\n  --version           Print version\n  -h, --help          Show help\n\nUse -- before publish text that starts with a dash.\n`);
 }
 
 async function version(): Promise<string> {
@@ -145,6 +145,8 @@ async function main(argv: string[]): Promise<void> {
 		} else if (command === "history") {
 			const response = await client.requestHistory({ room: options.room, topic: options.topic, limit: 50, signal: abortController.signal });
 			console.log(JSON.stringify(response.events, null, 2));
+		} else if (command === "tail") {
+			await runTail(client, options, abortController.signal);
 		} else {
 			throw new Error(`Unknown command: ${command}`);
 		}
@@ -153,6 +155,27 @@ async function main(argv: string[]): Promise<void> {
 		process.off("SIGTERM", stopSigterm);
 		client?.close();
 	}
+}
+
+async function runTail(client: PiBusClient, options: CommonOptions, signal: AbortSignal): Promise<void> {
+	if (options.topic && options.topic !== DEFAULT_TOPIC) {
+		await client.subscribe({ rooms: [options.room], topics: [options.topic] });
+	} else {
+		await client.subscribe({ rooms: [options.room], topics: ["*"] });
+	}
+	process.stderr.write(`[pi-bus] tailing ${options.room} (topic=${options.topic}); Ctrl+C to stop\n`);
+	const onEvent = (event: BusEvent) => {
+		process.stdout.write(`${JSON.stringify(event)}\n`);
+	};
+	client.on("bus_event", onEvent);
+	await new Promise<void>((resolve) => {
+		const finish = () => {
+			client.off("bus_event", onEvent);
+			resolve();
+		};
+		if (signal.aborted) finish();
+		else signal.addEventListener("abort", finish, { once: true });
+	});
 }
 
 function readValue(argv: string[], index: number, flag: string): string {
