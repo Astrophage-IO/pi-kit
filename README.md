@@ -23,6 +23,7 @@ bun test
 bun run test:pi
 bun run pi-bus:start -- --port 7373 --verbose
 bun run test:marathon
+bun run test:marathon-investigation
 pi install /absolute/path/to/pi-kit/packages/pi-superpowers
 pi install /absolute/path/to/pi-kit/packages/pi-profile
 pi install /absolute/path/to/pi-kit/packages/pi-marathon
@@ -55,6 +56,7 @@ EOF
 pi install @astrophage-io/pi-bus
 pi install @astrophage-io/pi-superpowers
 pi install @astrophage-io/pi-profile
+pi install @astrophage-io/pi-marathon
 ```
 
 GitHub Packages requires authentication for installs even when the underlying repo is public; this is a GitHub policy, not something this kit can change.
