@@ -1,6 +1,6 @@
 {
   "name": "@astrophage-io/pi-marathon",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A long-running, context-window-aware pi agent that iterates on a measurable goal indefinitely, ports Karpathy's autoresearch loop, and self-manages context via redirected runs and compaction.",
   "type": "module",
   "main": "./src/index.ts",
