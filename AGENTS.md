@@ -34,6 +34,7 @@ Anything that changes `proto/**` must be followed by `bun run proto:generate` an
 
 - Unit tests live in `packages/*/test/*.test.ts` and run under `bun test`.
 - The push-coordination smoke at `packages/pi-bus/test/pi-rpc-smoke.ts` requires `pi` on PATH and is not part of CI; run it locally with `bun run test:pi` when changing the pi-bus extension or protocol.
+- The pi-marathon smokes at `packages/pi-marathon/test/marathon-smoke.ts` and `packages/pi-marathon/test/investigation-smoke.ts` drive the extensions through a mock host (no `pi` or LLM needed) and are not part of CI; run them with `bun run test:marathon` and `bun run test:marathon-investigation` when changing the pi-marathon extensions.
 
 ## Releasing
 

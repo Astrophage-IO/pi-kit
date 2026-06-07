@@ -1,0 +1,100 @@
+{
+  "name": "@astrophage-io/pi-marathon",
+  "version": "0.1.0",
+  "description": "A long-running, context-window-aware pi agent that iterates on a measurable goal indefinitely, ports Karpathy's autoresearch loop, and self-manages context via redirected runs and compaction.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "bin": {
+    "pi-marathon": "./bin/pi-marathon.ts"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./mission": {
+      "types": "./src/mission.ts",
+      "bun": "./src/mission.ts",
+      "default": "./src/mission.ts"
+    },
+    "./results": {
+      "types": "./src/results.ts",
+      "bun": "./src/results.ts",
+      "default": "./src/results.ts"
+    },
+    "./status": {
+      "types": "./src/status.ts",
+      "bun": "./src/status.ts",
+      "default": "./src/status.ts"
+    },
+    "./extension": {
+      "types": "./extensions/pi-marathon.ts",
+      "bun": "./extensions/pi-marathon.ts",
+      "default": "./extensions/pi-marathon.ts"
+    }
+  },
+  "files": [
+    "bin",
+    "extensions",
+    "skills",
+    "src",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "agent",
+    "autonomous",
+    "long-running",
+    "autoresearch",
+    "compaction"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "scripts": {
+    "test": "bun test test/*.test.ts",
+    "test:smoke": "bun run test/marathon-smoke.ts",
+    "test:smoke:investigation": "bun run test/investigation-smoke.ts",
+    "start": "bun run bin/pi-marathon.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.73.0",
+    "@mariozechner/pi-coding-agent": "^0.73.0",
+    "@mariozechner/pi-tui": "^0.73.0",
+    "typebox": "^1.1.37"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/Astrophage-IO/pi-kit.git",
+    "directory": "packages/pi-marathon"
+  },
+  "homepage": "https://github.com/Astrophage-IO/pi-kit/tree/main/packages/pi-marathon#readme",
+  "bugs": {
+    "url": "https://github.com/Astrophage-IO/pi-kit/issues"
+  }
+}

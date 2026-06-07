@@ -11,12 +11,15 @@
   "scripts": {
     "test": "bun test packages/*/test/*.test.ts",
     "test:pi": "bun run packages/pi-bus/test/pi-rpc-smoke.ts",
+    "test:marathon": "bun run packages/pi-marathon/test/marathon-smoke.ts",
+    "test:marathon-investigation": "bun run packages/pi-marathon/test/investigation-smoke.ts",
     "typecheck": "tsc --noEmit",
     "proto:lint": "buf lint",
     "proto:generate": "buf generate",
     "pi-bus:start": "bun run packages/pi-bus/bin/pi-bus-server.ts",
     "pi-bus": "bun run packages/pi-bus/bin/pi-bus.ts",
     "pi-profile": "bun run packages/pi-profile/bin/pi-profile.ts",
+    "pi-marathon": "bun run packages/pi-marathon/bin/pi-marathon.ts",
     "changeset": "changeset",
     "version-packages": "changeset version && bun install --no-frozen-lockfile",
     "release": "changeset publish"
