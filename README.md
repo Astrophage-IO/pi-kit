@@ -9,6 +9,7 @@ The first package, `@astrophage-io/pi-bus`, is a protobuf-framed push event bus 
 - [`packages/pi-bus`](./packages/pi-bus) — push-based bidirectional event bus for coordinating isolated pi agents.
 - [`packages/pi-superpowers`](./packages/pi-superpowers) — parent-session tools that spawn MCP-backed specialist Pi agents for Slack, Jira, and Confluence research.
 - [`packages/pi-profile`](./packages/pi-profile) — portable pi setup via a single gist: declare extensions, settings, files, and required env vars; `pi-profile sync` brings any machine up to date.
+- [`packages/pi-marathon`](./packages/pi-marathon) — a long-running, context-window-aware pi agent that iterates on a measurable goal indefinitely (ports Karpathy's autoresearch loop) and self-manages context via redirected runs and compaction.
 
 Published to GitHub Packages under `@astrophage-io/*`. See [Install from GitHub Packages](#install-from-github-packages) for the one-time `.npmrc` setup consumers need.
 
@@ -21,8 +22,10 @@ bun run typecheck
 bun test
 bun run test:pi
 bun run pi-bus:start -- --port 7373 --verbose
+bun run test:marathon
 pi install /absolute/path/to/pi-kit/packages/pi-superpowers
 pi install /absolute/path/to/pi-kit/packages/pi-profile
+pi install /absolute/path/to/pi-kit/packages/pi-marathon
 ```
 
 ## Repository conventions

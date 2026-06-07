@@ -18,7 +18,7 @@
     },
     "packages/pi-bus": {
       "name": "@astrophage-io/pi-bus",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "pi-bus": "./bin/pi-bus.ts",
         "pi-bus-server": "./bin/pi-bus-server.ts",
@@ -40,9 +40,30 @@
         "typebox": "*",
       },
     },
+    "packages/pi-marathon": {
+      "name": "@astrophage-io/pi-marathon",
+      "version": "0.1.0",
+      "bin": {
+        "pi-marathon": "./bin/pi-marathon.ts",
+      },
+      "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.29.0",
+      },
+      "devDependencies": {
+        "@mariozechner/pi-ai": "^0.73.0",
+        "@mariozechner/pi-coding-agent": "^0.73.0",
+        "@mariozechner/pi-tui": "^0.73.0",
+        "typebox": "^1.1.37",
+      },
+      "peerDependencies": {
+        "@mariozechner/pi-coding-agent": "*",
+        "@mariozechner/pi-tui": "*",
+        "typebox": "*",
+      },
+    },
     "packages/pi-profile": {
       "name": "@astrophage-io/pi-profile",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "pi-profile": "./bin/pi-profile.ts",
       },
@@ -60,7 +81,7 @@
     },
     "packages/pi-superpowers": {
       "name": "@astrophage-io/pi-superpowers",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.29.0",
       },
@@ -85,6 +106,8 @@
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.91.1", "", { "dependencies": { "json-schema-to-ts": "^3.1.1" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-LAmu761tSN9r66ixvmciswUj/ZC+1Q4iAfpedTfSVLeswRwnY3n2Nb6Tsk+cLPP28aLOPWeMgIuTuCcMC6W/iw=="],
 
     "@astrophage-io/pi-bus": ["@astrophage-io/pi-bus@workspace:packages/pi-bus"],
+
+    "@astrophage-io/pi-marathon": ["@astrophage-io/pi-marathon@workspace:packages/pi-marathon"],
 
     "@astrophage-io/pi-profile": ["@astrophage-io/pi-profile@workspace:packages/pi-profile"],
 
