@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -129,7 +130,11 @@ async function commandStop(args: ParsedArgs): Promise<void> {
 }
 
 function commandStart(args: ParsedArgs): void {
-	const extensionPath = path.resolve(fileURLToPath(new URL("../extensions/pi-marathon.ts", import.meta.url)));
+	// Prefer the self-contained bundle (always shipped in installed packages);
+	// fall back to source in a pre-build dev checkout.
+	const bundlePath = path.resolve(fileURLToPath(new URL("../dist/pi-marathon.js", import.meta.url)));
+	const sourcePath = path.resolve(fileURLToPath(new URL("../extensions/pi-marathon.ts", import.meta.url)));
+	const extensionPath = existsSync(bundlePath) ? bundlePath : sourcePath;
 	const skillPath = path.resolve(fileURLToPath(new URL("../skills/marathon", import.meta.url)));
 	const dir = readDirFlag(args.flags);
 	const dirFlag = dir ? ` --marathon-dir ${dir}` : "";

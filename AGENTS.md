@@ -26,9 +26,12 @@ bun run proto:generate
 git diff --exit-code -- packages/pi-bus/src/gen proto    # generated protobuf bindings must be committed
 bun run typecheck
 bun test
+bun run build    # bundle extensions into packages/*/dist (also run in CI before publish)
 ```
 
 Anything that changes `proto/**` must be followed by `bun run proto:generate` and the regenerated files in `packages/pi-bus/src/gen` must be committed in the same change.
+
+Extensions are published as self-contained bundles. `bun run build` inlines real npm deps into `packages/*/dist/*.js` (keeping pi-provided modules external) and each package's `pi.extensions` points at the built bundle. `dist/` is gitignored and rebuilt by the release workflow. Editing an extension or its `src` requires rebuilding to test the installed/bundled form.
 
 ## Tests
 

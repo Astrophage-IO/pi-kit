@@ -14,6 +14,7 @@
     "test:marathon": "bun run packages/pi-marathon/test/marathon-smoke.ts",
     "test:marathon-investigation": "bun run packages/pi-marathon/test/investigation-smoke.ts",
     "typecheck": "tsc --noEmit",
+    "build": "bun run scripts/build-extensions.ts --all",
     "proto:lint": "buf lint",
     "proto:generate": "buf generate",
     "pi-bus:start": "bun run packages/pi-bus/bin/pi-bus-server.ts",
@@ -22,7 +23,7 @@
     "pi-marathon": "bun run packages/pi-marathon/bin/pi-marathon.ts",
     "changeset": "changeset",
     "version-packages": "changeset version && bun install --no-frozen-lockfile",
-    "release": "changeset publish"
+    "release": "bun run build && changeset publish"
   },
   "repository": {
     "type": "git",

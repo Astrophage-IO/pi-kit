@@ -490,15 +490,35 @@ function resolveBusExtension(pi: ExtensionAPI): string | undefined {
 	const requireFn = createRequire(import.meta.url);
 	try {
 		const pkgPath = requireFn.resolve("@astrophage-io/pi-bus/package.json");
-		const pkgDir = path.dirname(pkgPath);
-		const candidate = path.join(pkgDir, "extensions", "pi-bus.ts");
-		if (existsSync(candidate)) return candidate;
+		const entry = resolvePiBusEntry(path.dirname(pkgPath));
+		if (entry) return entry;
 	} catch {
 		// fall through to monorepo fallback
 	}
-	const monorepoCandidate = path.resolve(packageRoot(), "..", "pi-bus", "extensions", "pi-bus.ts");
-	if (existsSync(monorepoCandidate)) return monorepoCandidate;
+	const monorepoEntry = resolvePiBusEntry(path.resolve(packageRoot(), "..", "pi-bus"));
+	if (monorepoEntry) return monorepoEntry;
 	throw new Error("Could not locate pi-bus extension. Install @astrophage-io/pi-bus or pass --superpower-bus-extension <path>.");
+}
+
+// Resolve pi-bus's extension entry from its own package.json `pi.extensions`
+// (the self-contained bundle, e.g. ./dist/pi-bus.js) so the spawned child loads
+// the same dependency-inlined artifact this package does. Falls back to known
+// bundle/source locations for older installs or a pre-build dev checkout.
+function resolvePiBusEntry(pkgDir: string): string | undefined {
+	try {
+		const manifest = JSON.parse(readFileSync(path.join(pkgDir, "package.json"), "utf8"));
+		for (const rel of manifest.pi?.extensions ?? []) {
+			const candidate = path.resolve(pkgDir, rel);
+			if (existsSync(candidate)) return candidate;
+		}
+	} catch {
+		// ignore malformed/missing manifest, try fixed fallbacks
+	}
+	for (const rel of ["dist/pi-bus.js", "extensions/pi-bus.ts"]) {
+		const candidate = path.join(pkgDir, rel);
+		if (existsSync(candidate)) return candidate;
+	}
+	return undefined;
 }
 
 function buildChildEnv(profileName: string, busExtension: string | undefined): Record<string, string> {

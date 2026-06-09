@@ -20,14 +20,25 @@ bun run proto:lint
 bun run proto:generate
 bun run typecheck
 bun test
+bun run build        # bundle each extension into packages/*/dist (self-contained)
 bun run test:pi
 bun run pi-bus:start -- --port 7373 --verbose
 bun run test:marathon
 bun run test:marathon-investigation
+
+# Installing from a local checkout loads the bundled dist/, so build first:
+bun run build
 pi install /absolute/path/to/pi-kit/packages/pi-superpowers
 pi install /absolute/path/to/pi-kit/packages/pi-profile
 pi install /absolute/path/to/pi-kit/packages/pi-marathon
 ```
+
+Extensions are shipped as self-contained bundles: `bun run build` inlines real npm
+dependencies (e.g. `@bufbuild/protobuf`, `@modelcontextprotocol/sdk`) into
+`packages/*/dist/*.js`, while keeping pi-provided modules (pi-coding-agent, pi-tui,
+typebox) external. Each package's `pi.extensions` points at the built bundle, so an
+installed extension never depends on a co-located `node_modules`. The release workflow
+builds automatically before publishing.
 
 ## Repository conventions
 
