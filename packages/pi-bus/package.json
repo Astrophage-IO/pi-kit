@@ -34,12 +34,12 @@
     },
     "./extension": {
       "types": "./extensions/pi-bus.ts",
-      "bun": "./extensions/pi-bus.ts",
-      "default": "./extensions/pi-bus.ts"
+      "default": "./dist/pi-bus.js"
     }
   },
   "files": [
     "bin",
+    "dist",
     "extensions",
     "src",
     "README.md",
@@ -56,10 +56,12 @@
   ],
   "pi": {
     "extensions": [
-      "./extensions"
+      "./dist/pi-bus.js"
     ]
   },
   "scripts": {
+    "build": "bun run ../../scripts/build-extensions.ts .",
+    "prepublishOnly": "bun run build",
     "test": "bun test test/*.test.ts",
     "test:pi": "bun run test/pi-rpc-smoke.ts",
     "start": "bun run bin/pi-bus-server.ts"
@@ -71,6 +73,17 @@
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
     "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": {
+      "optional": true
+    },
+    "@mariozechner/pi-tui": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@mariozechner/pi-ai": "^0.73.0",

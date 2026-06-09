@@ -31,12 +31,12 @@
     },
     "./extension": {
       "types": "./extensions/pi-marathon.ts",
-      "bun": "./extensions/pi-marathon.ts",
-      "default": "./extensions/pi-marathon.ts"
+      "default": "./dist/pi-marathon.js"
     }
   },
   "files": [
     "bin",
+    "dist",
     "extensions",
     "skills",
     "src",
@@ -55,13 +55,16 @@
   ],
   "pi": {
     "extensions": [
-      "./extensions"
+      "./dist/pi-marathon.js",
+      "./dist/marathon-investigation.js"
     ],
     "skills": [
       "./skills"
     ]
   },
   "scripts": {
+    "build": "bun run ../../scripts/build-extensions.ts .",
+    "prepublishOnly": "bun run build",
     "test": "bun test test/*.test.ts",
     "test:smoke": "bun run test/marathon-smoke.ts",
     "test:smoke:investigation": "bun run test/investigation-smoke.ts",
@@ -74,6 +77,17 @@
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
     "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": {
+      "optional": true
+    },
+    "@mariozechner/pi-tui": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@mariozechner/pi-ai": "^0.73.0",

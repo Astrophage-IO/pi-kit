@@ -12,12 +12,13 @@
     },
     "./extension": {
       "types": "./extensions/superpowers.ts",
-      "default": "./extensions/superpowers.ts"
+      "default": "./dist/superpowers.js"
     }
   },
   "files": [
     "agents",
     "config",
+    "dist",
     "extensions",
     "README.md",
     "LICENSE",
@@ -34,8 +35,12 @@
   ],
   "pi": {
     "extensions": [
-      "./extensions"
+      "./dist/superpowers.js"
     ]
+  },
+  "scripts": {
+    "build": "bun run ../../scripts/build-extensions.ts .",
+    "prepublishOnly": "bun run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"
@@ -48,6 +53,15 @@
   },
   "peerDependenciesMeta": {
     "@astrophage-io/pi-bus": {
+      "optional": true
+    },
+    "@mariozechner/pi-coding-agent": {
+      "optional": true
+    },
+    "@mariozechner/pi-tui": {
+      "optional": true
+    },
+    "typebox": {
       "optional": true
     }
   },

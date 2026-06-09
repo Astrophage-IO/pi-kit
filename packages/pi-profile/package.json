@@ -41,12 +41,12 @@
     },
     "./extension": {
       "types": "./extensions/pi-profile.ts",
-      "bun": "./extensions/pi-profile.ts",
-      "default": "./extensions/pi-profile.ts"
+      "default": "./dist/pi-profile.js"
     }
   },
   "files": [
     "bin",
+    "dist",
     "extensions",
     "src",
     "README.md",
@@ -64,10 +64,12 @@
   ],
   "pi": {
     "extensions": [
-      "./extensions"
+      "./dist/pi-profile.js"
     ]
   },
   "scripts": {
+    "build": "bun run ../../scripts/build-extensions.ts .",
+    "prepublishOnly": "bun run build",
     "test": "bun test test/*.test.ts",
     "start": "bun run bin/pi-profile.ts"
   },
@@ -75,6 +77,17 @@
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
     "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": {
+      "optional": true
+    },
+    "@mariozechner/pi-tui": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@mariozechner/pi-ai": "^0.73.0",
